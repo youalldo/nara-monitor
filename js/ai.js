@@ -1,6 +1,6 @@
 /* 공고문·제안요청서 AI 분석 (Claude API, 공식 Anthropic SDK)
  *
- * 브라우저에서 사용자의 API 키로 api.anthropic.com 에 직접 요청한다(키는 이 브라우저에만 저장).
+ * GitHub Actions 의 서버 작업(server/analyze.js)에서 실행한다. API 키는 저장소 Secrets(ANTHROPIC_API_KEY).
  * 결과는 정해진 JSON 형식(구조화 출력)으로 받아 '용역리서칭' 검토 양식 칸에 그대로 넣는다.
  */
 (function (root, factory) {
@@ -91,19 +91,18 @@
     return blocks;
   }
 
-  function friendlyError(e, SDK) {
-    var A = SDK && SDK.default;
+  function friendlyError(e, A) {
     if (A) {
       if (e instanceof A.APIUserAbortError) return "분석을 취소했습니다.";
-      if (e instanceof A.AuthenticationError) return "Claude API 키가 올바르지 않습니다. [설정]에서 키를 확인하세요.";
+      if (e instanceof A.AuthenticationError) return "Claude API 키가 올바르지 않습니다. 저장소 Settings → Secrets 의 ANTHROPIC_API_KEY 를 확인하세요.";
       if (e instanceof A.PermissionDeniedError) return "이 API 키로는 사용할 수 없습니다(권한 없음). Anthropic Console 에서 키 권한을 확인하세요.";
-      if (e instanceof A.RateLimitError) return "요청이 많아 잠시 제한되었습니다. 1분쯤 뒤 다시 시도하세요.";
+      if (e instanceof A.RateLimitError) return "Claude API 요청 한도에 걸렸습니다. 다음 실행 때 다시 분석합니다.";
       if (e instanceof A.BadRequestError) {
         if (/credit balance/i.test(e.message)) return "Anthropic 계정의 크레딧이 부족합니다. console.anthropic.com 의 Billing 에서 충전하세요.";
-        if (/too long|too large|exceed/i.test(e.message)) return "문서가 너무 커서 한 번에 분석할 수 없습니다. 꼭 필요한 파일(공고문·제안요청서)만 올려 주세요.";
+        if (/too long|too large|exceed/i.test(e.message)) return "문서가 너무 커서 한 번에 분석할 수 없습니다.";
         return "요청이 거절되었습니다: " + e.message;
       }
-      if (e instanceof A.APIConnectionError) return "Claude API 에 연결하지 못했습니다. 인터넷 연결(회사망이면 api.anthropic.com 허용 여부)을 확인하세요.";
+      if (e instanceof A.APIConnectionError) return "Claude API 에 연결하지 못했습니다.";
       if (e instanceof A.APIError) return "Claude API 오류(" + e.status + "): " + e.message;
     }
     return (e && e.message) || String(e);
@@ -118,12 +117,12 @@
   }
 
   /**
-   * 분석 실행. opts: { apiKey, SDK(번들 전역), docs, item, company, signal, onStatus }
+   * 분석 실행. opts: { Anthropic(SDK 클래스), apiKey, docs, item, company, signal }
    * → { result, usage: {input, output, cost}, model }
    */
   function analyze(opts) {
-    var SDK = opts.SDK, A = SDK.default;
-    var client = new A({ apiKey: opts.apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 });
+    var A = opts.Anthropic;
+    var client = new A({ apiKey: opts.apiKey, maxRetries: 2 });
     var params = {
       model: MODEL,
       max_tokens: 64000,
@@ -133,15 +132,12 @@
       system: SYSTEM,
       messages: [{ role: "user", content: buildContent(opts.docs, opts.item, opts.company) }]
     };
-    if (opts.onStatus) opts.onStatus("AI 가 문서를 읽고 있습니다…");
-    var stream = client.beta.messages.stream(params, { signal: opts.signal });
-    stream.on("text", function () { if (opts.onStatus) opts.onStatus("검토 양식을 작성하고 있습니다…"); });
-    return stream.finalMessage().then(function (msg) {
-      if (msg.stop_reason === "refusal") throw new Error("AI 가 이 문서 분석을 거절했습니다. 다른 파일로 다시 시도해 보세요.");
-      if (msg.stop_reason === "max_tokens") throw new Error("분석 결과가 너무 길어 중간에 끊겼습니다. 파일 수를 줄여 다시 시도하세요.");
+    return client.beta.messages.stream(params, { signal: opts.signal }).finalMessage().then(function (msg) {
+      if (msg.stop_reason === "refusal") throw new Error("AI 가 이 문서 분석을 거절했습니다.");
+      if (msg.stop_reason === "max_tokens") throw new Error("분석 결과가 너무 길어 중간에 끊겼습니다.");
       var text = msg.content.filter(function (b) { return b.type === "text"; }).map(function (b) { return b.text; }).join("");
       var out;
-      try { out = JSON.parse(text); } catch (e) { throw new Error("AI 응답을 해석하지 못했습니다. 다시 시도해 주세요."); }
+      try { out = JSON.parse(text); } catch (e) { throw new Error("AI 응답을 해석하지 못했습니다."); }
       var u = msg.usage || {};
       var input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
       return {
@@ -149,24 +145,9 @@
         usage: { input: input, output: u.output_tokens || 0, cost: input * PRICE.input + (u.output_tokens || 0) * PRICE.output },
         model: msg.model || MODEL
       };
-    }).catch(function (e) { throw new Error(friendlyError(e, SDK)); });
-  }
-
-  /** 키 확인: 모델 정보 조회(무료)로 키가 유효한지 본다 */
-  function checkKey(apiKey, SDK) {
-    var client = new SDK.default({ apiKey: apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 });
-    return client.models.retrieve(MODEL).then(function (m) { return m.display_name || m.id; })
-      .catch(function (e) { throw new Error(friendlyError(e, SDK)); });
-  }
-
-  /** 대략적인 입력 크기 안내용 (한글 1자 ≈ 1토큰으로 넉넉히 계산) */
-  function estimate(docs) {
-    var chars = 0, pdfBytes = 0;
-    docs.forEach(function (d) { chars += d.chars || 0; if (d.kind === "pdf") pdfBytes += d.size || 0; });
-    var tokens = chars + Math.round(pdfBytes / 60);     // PDF 는 대략 60바이트 ≈ 1토큰(쪽당 글자+그림)
-    return { tokens: tokens, cost: tokens * PRICE.input + 3000 * PRICE.output };
+    }).catch(function (e) { throw new Error(friendlyError(e, A)); });
   }
 
   return { MODEL: MODEL, SCHEMA: SCHEMA, SYSTEM: SYSTEM, SMALL_RULES: SMALL_RULES,
-           buildContent: buildContent, analyze: analyze, checkKey: checkKey, estimate: estimate, validate: validate };
+           buildContent: buildContent, analyze: analyze, validate: validate, PRICE: PRICE };
 });

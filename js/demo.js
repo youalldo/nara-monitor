@@ -22,6 +22,20 @@
     ["orderplan", "R&D 성과분석 및 중장기 투자전략 연구", "가상과학기술원", "", 250000000, [2, 10], 5]
   ];
 
+  // 서버 자동 AI 분석 결과 예시 (SAMPLES 순번 → 검토양식 칸)
+  var REVIEWS = {
+    0: { evaluation_ratio: "기술평가(90) 가격평가(10)", quantitative: "수행실적(10): 최근 3년 유사용역 3건 이상 만점\n전문인력(5): 책임연구원 박사 또는 기술사\n신용평가(5): BBB0 이상 만점",
+         period: "계약체결일로부터 6개월", submission: "전자(가격) / 방문제출(제안서)", deadlines: "2026.11.25(수) 10:00 가격 입찰 마감\n2026.11.26(목) 17:00 제안서 제출 마감\n2026.11.30(월) 제안발표",
+         eligibility: "학술연구용역(1169) 등록\n중소기업·소상공인 확인서 소지자\n공동수급 불허", scope: "대내외 환경분석\n비전·경영목표 재정립\n전략과제 및 실행계획 수립\n성과지표(KPI) 설계",
+         notes: "제안서 10부 + 전자파일 제출\n착수·중간·최종 보고 3회", small_business_rule: "중소기업 참가(중기업 가능)", small_business_evidence: "「중소기업·소상공인 확인서」를 소지한 자",
+         midsize_eligible: "가능", check_points: "유사용역 실적 3건 충족 여부 확인", files: ["제안요청서.hwp", "입찰공고문.hwp"] },
+    2: { evaluation_ratio: "기술평가(80) 가격평가(20)", quantitative: "수행실적(10): 유사용역 합산 1억 이상 만점\n경영상태(5): 신용평가 등급",
+         period: "계약체결일로부터 4개월", submission: "전자", deadlines: "입찰 마감일 참조", eligibility: "학술연구용역(1169) 등록\n중소기업 확인서 소지자 (판로지원법 제7조의2 예외 적용)",
+         scope: "성과관리체계 진단\nBSC 재설계\n평가지표 개선", notes: "", small_business_rule: "중소기업 참가(중기업 가능)",
+         small_business_evidence: "본 입찰은 「중소기업제품 구매촉진 및 판로지원에 관한 법률」 제7조의2에 따라 중소기업자로 참가를 제한합니다",
+         midsize_eligible: "가능", check_points: "1억 미만이지만 중기업 참가 가능 (예외 공고)", files: ["제안요청서.hwp"] }
+  };
+
   function demoItems(C, settings, now) {
     var matcher = new C.Matcher(settings.keywords, settings.excludes);
     var today = C.kstMidnight(now), out = [];
@@ -61,6 +75,7 @@
         it.details = { "발주계획번호": no, "발주예정": ym.slice(0, 4) + "년 " + parseInt(ym.slice(4), 10) + "월", "계약방법": "협상에 의한 계약", "담당부서": "기획예산팀" };
         it.meta = { budget: r[4], usg: "기관 중장기 전략체계 재정립 및 실행과제 도출", cntrctMthd: "협상에 의한 계약", officer: "기획예산팀 이예시 (000-000-0000)" };
       }
+      if (REVIEWS[n]) it.review = Object.assign({ analyzedAt: now.toISOString(), source: "server" }, REVIEWS[n]);
       out.push(it);
     });
     return out;

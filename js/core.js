@@ -22,7 +22,6 @@
 
   var DEFAULT_SETTINGS = {
     serviceKey: "",
-    aiKey: "",
     keywords: ["경영", "전략", "중장기", "조직", "성과", "평가"],
     // 회사 실적 662건과 대조해 충돌이 없는 것만 선별 (2026-11): 실적 중 잘못 제외되는 건 0건
     excludes: ["환경영향평가", "전략환경영향평가", "환경영향", "교통영향평가", "재해영향평가", "건강영향평가",
@@ -272,6 +271,8 @@
       var u = s(raw["ntceSpecDocUrl" + i]);
       if (/^https?:\/\//.test(u)) files.push({ name: s(raw["ntceSpecFileNm" + i]) || "첨부파일 " + i, url: u });
     }
+    var std = s(raw.stdNtceDocUrl);
+    if (/^https?:\/\//.test(std)) files.unshift({ name: "표준공고서", url: std });
     return makeItem("bid", category, {
       id: "bid:" + no + "-" + ord, no: no + "-" + ord,
       title: first(raw, "bidNtceNm"),

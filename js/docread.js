@@ -39,12 +39,16 @@
     }
     if (eocd < 0) throw new DocError("압축(ZIP) 형식이 아닙니다");
     var count = le16(b, eocd + 10), off = le32(b, eocd + 16), entries = {};
-    var dec = new TextDecoder("utf-8");
+    var utf8 = new TextDecoder("utf-8"), cp949 = null;
+    try { cp949 = new TextDecoder("euc-kr"); } catch (e) { cp949 = null; }
     for (var n = 0; n < count; n++) {
       if (le32(b, off) !== 0x02014b50) throw new DocError("ZIP 목록이 손상되었습니다");
-      var method = le16(b, off + 10), csize = le32(b, off + 20), nlen = le16(b, off + 28),
+      var flags = le16(b, off + 8), method = le16(b, off + 10), csize = le32(b, off + 20), nlen = le16(b, off + 28),
           xlen = le16(b, off + 30), clen = le16(b, off + 32), lho = le32(b, off + 42);
-      var name = dec.decode(b.subarray(off + 46, off + 46 + nlen));
+      var raw = b.subarray(off + 46, off + 46 + nlen), name;
+      // 한국 Windows 에서 만든 ZIP 은 파일 이름이 CP949(EUC-KR) — UTF-8 표시(bit 11)가 없으면 CP949 로 읽는다
+      if (flags & 0x800 || !cp949) name = utf8.decode(raw);
+      else { try { name = new TextDecoder("utf-8", { fatal: true }).decode(raw); } catch (e) { name = cp949.decode(raw); } }
       entries[name] = { method: method, csize: csize, lho: lho };
       off += 46 + nlen + xlen + clen;
     }

@@ -1,0 +1,51 @@
+name: 공고문 AI 분석
+
+on:
+  schedule:
+    # GitHub 은 UTC 기준 (한국시간 = UTC + 9시간)
+    - cron: "40 22 * * 0-4"   # 한국시간 월~금 07:40
+    - cron: "40 3 * * 1-5"    # 한국시간 월~금 12:40
+    - cron: "40 9 * * 1-5"    # 한국시간 월~금 18:40
+  workflow_dispatch:           # Actions 탭에서 'Run workflow' 로 바로 실행
+
+permissions:
+  contents: write              # 분석 결과(data/reviews.json)를 저장소에 저장
+
+concurrency:
+  group: nara-analyze
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 패키지 설치
+        run: npm ci
+
+      - name: 나라장터 조회 및 공고문 AI 분석
+        env:
+          G2B_SERVICE_KEY: ${{ secrets.G2B_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node server/analyze.js
+
+      - name: 결과 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f data/reviews.json ]; then git add data/reviews.json; fi
+          if git diff --cached --quiet; then
+            echo "변경 없음"
+          else
+            git commit -m "공고문 AI 분석 $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')"
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
