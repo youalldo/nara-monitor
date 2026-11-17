@@ -1,7 +1,7 @@
 /* 나라장터 키워드 모니터 — 화면 */
 (function () {
   "use strict";
-  var VERSION = "1.3.0";
+  var VERSION = "1.4.0";
   var C = window.NaraCore, Store = window.NaraStore, Demo = window.NaraDemo;
   var KIND = C.KIND_LABEL;
   var WD = ["일", "월", "화", "수", "목", "금", "토"];
@@ -9,7 +9,7 @@
 
   var S = {
     settings: null, meta: {}, items: [], rows: [], demo: false, busy: false, suggest: null,
-    ui: { tab: "all", kws: {}, q: "", onlyNew: false, onlyAi: false, hideClosed: true, showEx: false, sort: "posted", urgent: false, elig: "eligible" }
+    ui: { tab: "all", kws: {}, q: "", onlyNew: false, hideClosed: true, showEx: false, sort: "posted", urgent: false, elig: "eligible" }
   };
 
   // ───────────────────────── 공통 도우미 ─────────────────────────
@@ -135,13 +135,11 @@
         var old = byId[it.id];
         it.first_seen = old ? old.first_seen : runId;
         if (old && old.limits) it.limits = old.limits;
-        if (old && old.review) it.review = old.review;
         if (!old) fresh.push(it);
         byId[it.id] = it;
       });
       var res = rematchAndPrune(Object.keys(byId).map(function (k) { return byId[k]; }), S.settings, now);
       S.items = res.keep;
-      applyServer();
       var keys = Object.keys(r.stats);
       var allFailed = keys.length > 0 && keys.every(function (k) { return r.stats[k].error; });
       var newShown = fresh.filter(function (it) { return !it.excluded.length && res.keep.indexOf(it) >= 0; }).length;
@@ -197,7 +195,6 @@
     var u = S.ui;
     if (!u.showEx && it.excluded.length) return false;
     if (u.onlyNew && !isNew(it)) return false;
-    if (u.onlyAi && !it.review) return false;
     if (u.hideClosed && it.kind === "bid" && isClosed(it)) return false;
     if (!eligVisible(it)) return false;
     if (u.urgent) { var d = it.kind === "bid" && dday(it.deadline); if (!d || d.n < 0 || d.n > 3) return false; }
@@ -252,7 +249,6 @@
     if (it.agency) orgs.push("<span>" + (it.kind === "bid" ? "공고 " : "발주 ") + esc(it.agency) + "</span>");
     if (it.demand && it.demand !== it.agency) orgs.push("<span>" + (it.kind === "orderplan" ? "총괄 " : "수요 ") + esc(it.demand) + "</span>");
     h += '<div class="orgs">' + orgs.join("") + "</div>";
-    h += aiLine(it);
     h += '<div class="facts"><div class="fact"><span class="l">' + esc(it.amount_label || "금액") + '</span><span class="v' + (it.amount ? "" : " none") + '">' + (it.amount ? won(it.amount) : "미공개") + "</span></div>";
     if (it.deadline) {
       var d = dday(it.deadline);
@@ -265,20 +261,6 @@
       h += "<details><summary>상세 정보 · 참가자격 판단</summary>";
       h += "<dl><dt>참가자격 판단</dt><dd><b>" + esc(ev.label) + '</b><ul class="elig-why">' +
            ev.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + "</ul></dd></dl>";
-      var rv = it.review;
-      if (rv) {
-        var rows = [["기업규모 제한", rv.small_business_rule ? rv.small_business_rule + " · 우리 회사 참가 " + (rv.midsize_eligible || "") : ""],
-                    ["근거 문구", rv.small_business_evidence && rv.small_business_evidence !== "관련 문구 없음" ? rv.small_business_evidence : ""],
-                    ["평가비율", rv.evaluation_ratio], ["정량점수", rv.quantitative], ["과업기간", rv.period], ["접수구분", rv.submission],
-                    ["마감일정", rv.deadlines], ["참가범위", rv.eligibility], ["과업내용", rv.scope], ["고려사항", rv.notes], ["확인할 점", rv.check_points]];
-        h += '<div class="rv"><h4>공고문 AI 분석 · ' + esc(fmt(isoToKst(rv.analyzedAt))) + " (" + esc((rv.files || []).join(", ")) + ")</h4><dl>" +
-             rows.filter(function (r) { return r[1]; }).map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join("") + "</dl></div>";
-      }
-      var se = srvEntry(it);
-      if (se && se.files && se.files.length && se.status !== "done") {
-        h += '<div class="rv bad"><h4>서버 AI 분석 — 첨부파일 처리 결과</h4><ul class="elig-why">' + se.files.map(function (f) {
-          return "<li>" + esc(f.name) + " — " + esc(f.note || f.status) + "</li>"; }).join("") + "</ul></div>";
-      }
       if (keys.length) {
         h += "<dl>";
         keys.forEach(function (k) {
@@ -304,8 +286,6 @@
     else if (m.lastAttempt) parts_.push("마지막 조회 <b>" + esc(fmt(isoToKst(m.lastAttempt))) + "</b> (" + ago(m.lastAttempt) + ")");
     else if (st.serviceKey) parts_.push("아직 조회하지 않았습니다");
     if (m.calls && m.calls.day === C.fmtKst(new Date()).slice(0, 10)) parts_.push("오늘 API " + m.calls.n + "회 사용");
-    var r0 = !S.demo && SRV.data && (SRV.data.runs || [])[0];
-    if (r0) parts_.push("서버 AI 분석 " + esc(fmt(isoToKst(r0.at))));
     parts_.push("키워드 " + st.keywords.map(esc).join(", "));
     $("sub").innerHTML = parts_.join(" · ");
   }
@@ -324,17 +304,6 @@
       h += '<div class="banner info"><span class="grow">' + what + "로 지난 공고도 찾아볼까요?</span>" +
            '<button class="btn primary" type="button" data-act="suggest-run">최근 7일 다시 조회</button>' +
            '<button class="btn" type="button" data-act="suggest-close">닫기</button></div>';
-    }
-    var r0 = !S.demo && SRV.data && (SRV.data.runs || [])[0];
-    if (r0 && !r0.analyzed && r0.failed) {
-      h += '<div class="banner err"><span class="grow"><b>서버 AI 분석이 최근 실행(' + esc(fmt(isoToKst(r0.at))) + ')에서 한 건도 분석하지 못했습니다.</b> 다음 실행 때 다시 시도합니다.<ul>' +
-           (r0.errors || []).slice(0, 4).map(function (e) { return "<li>" + esc(e) + "</li>"; }).join("") + "</ul></span>" +
-           '<button class="btn" type="button" data-act="srv-setup">서버 분석 상태</button></div>';
-    }
-    if (!S.demo && SRV.state === "none" && !S.meta.hideSrvHint && S.settings.serviceKey) {
-      h += '<div class="banner info"><span class="grow"><b>공고문 자동 AI 분석</b>을 켜면 서버가 매일 공고문·제안요청서를 읽고 평가비율·정량점수·과업내용·기업규모 제한을 채워 둡니다. (처음 한 번 API 키 등록 필요)</span>' +
-           '<button class="btn primary" type="button" data-act="srv-setup">설정 방법</button>' +
-           '<button class="btn" type="button" data-act="srv-hide">닫기</button></div>';
     }
     if (!S.demo && S.meta.errors && S.meta.errors.length) {
       h += '<div class="banner err"><span class="grow"><b>일부 자료를 가져오지 못했습니다.</b> 다음 조회 때 같은 기간을 다시 조회합니다.<ul>' +
@@ -431,21 +400,19 @@
     var lines = [HEAD.join(",")].concat(exportRows().map(function (r) { return r.map(q).join(","); }));
     download(new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }), "nara_" + fileStamp() + ".csv");
   }
-  var scriptPromises = {};
-  function loadScript(src, globalName, errMsg) {
-    if (window[globalName]) return Promise.resolve(window[globalName]);
-    if (scriptPromises[src]) return scriptPromises[src];
-    scriptPromises[src] = new Promise(function (resolve, reject) {
+  var xlsxPromise = null;
+  function loadXlsx() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (xlsxPromise) return xlsxPromise;
+    xlsxPromise = new Promise(function (resolve, reject) {
       var s = document.createElement("script");
-      s.src = src;
-      s.onload = function () { resolve(window[globalName]); };
-      s.onerror = function () { delete scriptPromises[src]; reject(new Error(errMsg)); };
+      s.src = "vendor/xlsx-0.18.5.full.min.js";
+      s.onload = function () { resolve(window.XLSX); };
+      s.onerror = function () { xlsxPromise = null; reject(new Error("엑셀 모듈을 불러오지 못했습니다")); };
       document.head.appendChild(s);
     });
-    return scriptPromises[src];
+    return xlsxPromise;
   }
-  function loadXlsx() { return loadScript("vendor/xlsx-0.18.5.full.min.js", "XLSX", "엑셀 모듈을 불러오지 못했습니다"); }
-
   // 사용자가 쓰던 '용역리서칭' 검토 양식과 같은 열 순서·너비 (A열 비움, 2행 제목, S1 '의견')
   var REVIEW_HEAD = ["업데이트날짜", "입찰공고번호", "입찰진행여부", "작성자", "유형", "키워드", "발주처", "용역명",
     "사업금액(단위:원,VAT포함)", "과업기간", "접수구분", "가격/제안서 입찰 마감일", "입찰참가범위", "평가비율", "정량점수",
@@ -468,18 +435,11 @@
     if (officer) note.push("담당자: " + officer);
     if (it.files && it.files.length) note.push("첨부: " + it.files.map(function (f) { return f.name; }).join(", "));
     if (safeUrl(it.url)) note.push("공고: " + safeUrl(it.url));
-    var why = ev.reasons.filter(function (r) { return !/1억 이상|참여 가능$|충족|제한 없음|^공고문 분석/.test(r); }).slice(0, 2);
-    var rv = it.review || {};
-    var checkCol = ev.label + (why.length ? " — " + why.join(" / ") : "");
-    if (rv.small_business_rule) checkCol += "\n기업규모: " + rv.small_business_rule + " / 우리 회사 참가: " + rv.midsize_eligible +
-      (rv.small_business_evidence && rv.small_business_evidence !== "관련 문구 없음" ? "\n근거: " + rv.small_business_evidence : "");
-    if (rv.check_points) checkCol += "\n" + rv.check_points;
-    return ["", dotDate(C.fmtKst(new Date()).slice(0, 10)), it.no || rv.notice_no || "", "", (S.settings.company || {}).author || "",
-      TYPE_NAME[it.kind], it.matched.join(", "), it.kind === "orderplan" ? it.agency : (it.demand || it.agency || rv.client), it.title,
-      vat || rv.budget_vat_included || "", rv.period || period, rv.submission || recv, rv.deadlines || due,
-      rv.eligibility ? rv.eligibility + "\n[나라장터 정보] " + ev.scope : ev.scope,
-      rv.evaluation_ratio || "", rv.quantitative || "", rv.scope || (it.kind === "orderplan" ? (m.usg || "") : ""),
-      [rv.notes, note.join(" / ")].filter(Boolean).join("\n"), checkCol];
+    var why = ev.reasons.filter(function (r) { return !/1억 이상|참여 가능$|충족|제한 없음/.test(r); }).slice(0, 2);
+    return ["", dotDate(C.fmtKst(new Date()).slice(0, 10)), it.no || "", "", (S.settings.company || {}).author || "",
+      TYPE_NAME[it.kind], it.matched.join(", "), it.kind === "orderplan" ? it.agency : (it.demand || it.agency), it.title,
+      vat, period, recv, due, ev.scope, "", "", it.kind === "orderplan" ? (m.usg || "") : "", note.join(" / "),
+      ev.label + (why.length ? " — " + why.join(" / ") : "")];
   }
   function exportXlsx() {
     if (!S.rows.length) { toast("내보낼 공고가 없습니다"); return; }
@@ -506,142 +466,6 @@
       .then(function () { $("xlsxBtn").disabled = false; });
   }
 
-  // ───────────────────────── 서버 자동 AI 분석 결과 ─────────────────────────
-  // GitHub Actions(server/analyze.js)가 저장소의 data/reviews.json 에 남긴 결과를 읽어 공고에 붙인다.
-  var SRV = { data: null, state: "idle", error: "", loadedAt: 0 };
-  var SRV_STALE = 30 * 60e3;
-  function repoInfo() {
-    var m = /^([a-z0-9-]+)\.github\.io$/i.exec(location.hostname), seg = location.pathname.split("/").filter(Boolean)[0];
-    if (m && seg && !/\.html?$/i.test(seg)) return { owner: m[1], repo: seg, pages: true };
-    return { owner: "youalldo", repo: "nara-monitor", pages: false };   // 내 PC 등 다른 곳에서 열었을 때 (링크용)
-  }
-  function ghUrl(path) { var r = repoInfo(); return "https://github.com/" + r.owner + "/" + r.repo + path; }
-  function srvUrls() {
-    var r = repoInfo(), t = "?t=" + Math.floor(Date.now() / 60e3), list = [];
-    // 저장소 원본을 바로 읽는다 (GitHub Pages 다시 배포를 기다리지 않음)
-    if (r.pages) list.push("https://raw.githubusercontent.com/" + r.owner + "/" + r.repo + "/main/data/reviews.json" + t);
-    list.push("data/reviews.json" + t);
-    return list;
-  }
-  function loadServer() {
-    if (S.demo || !window.fetch) return Promise.resolve();
-    SRV.state = "loading";
-    var urls = srvUrls(), missing = 0, errs = [];
-    function attempt(i) {
-      if (i >= urls.length) {
-        SRV.state = SRV.data ? "ok" : (missing === urls.length ? "none" : "error");
-        SRV.error = errs.join(" / ");
-        return Promise.resolve();
-      }
-      return fetch(urls[i], { cache: "no-store" }).then(function (r) {
-        if (r.status === 404) { missing++; return null; }
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      }).then(function (d) {
-        if (!d) return attempt(i + 1);
-        if (typeof d.items !== "object" || !d.items) throw new Error("결과 파일 형식이 올바르지 않습니다");
-        SRV.data = d; SRV.state = "ok"; SRV.error = ""; SRV.loadedAt = Date.now();
-      }).catch(function (e) { errs.push((e && e.message) || String(e)); return attempt(i + 1); });
-    }
-    return attempt(0);
-  }
-  function srvEntry(it) { var d = SRV.data; return d && !S.demo && it && d.items[it.id] || null; }
-  /** 서버 분석 결과를 공고에 붙이고, 이 브라우저에 없는 분석 완료 공고는 목록에 더한다 */
-  function applyServer() {
-    var d = SRV.data; if (!d || S.demo) return 0;
-    var byId = {}, added = 0, st = S.settings, m = new C.Matcher(st.keywords, st.excludes);
-    var cutoff = new Date(Date.now() - st.keepDays * DAY).toISOString();
-    S.items.forEach(function (it) { byId[it.id] = it; });
-    Object.keys(d.items).forEach(function (id) {
-      var e = d.items[id]; if (!e || !e.item) return;
-      var it = byId[id];
-      if (!it) {
-        if (e.status !== "done" || !e.review) return;
-        var src = e.item, seen = e.review.analyzedAt || e.checkedAt || "";
-        if (!st.sources[src.kind] || st.categories.indexOf(src.category) < 0 || seen < cutoff) return;
-        var r = m.match(src.title); if (!r.matched.length) return;
-        it = JSON.parse(JSON.stringify(src));
-        it.matched = r.matched; it.excluded = r.excluded; it.first_seen = seen; it.fromServer = true;
-        S.items.push(it); byId[id] = it; added++;
-      }
-      if (e.status === "done" && e.review) it.review = e.review;
-      if (!(it.limits && it.limits.ok) && e.item.limits && e.item.limits.ok) it.limits = e.item.limits;
-    });
-    return added;
-  }
-  function refreshServer() {
-    return loadServer().then(function () {
-      if (applyServer() && !S.demo) Store.putItems(S.items.filter(function (it) { return it.fromServer; }));
-      renderAll();
-      if ($("settings").open) renderSrvStatus();
-    });
-  }
-  function aiLine(it) {
-    if (it.kind === "orderplan") return "";
-    var rv = it.review, se = srvEntry(it);
-    if (rv) {
-      var v = rv.midsize_eligible === "가능" ? "ok" : rv.midsize_eligible === "불가" ? "no" : "check";
-      return '<div class="ai-line"><span class="badge b-ai">AI 분석</span><span>' + esc(rv.evaluation_ratio || "평가비율 정보 없음") + "</span>" +
-        (rv.small_business_rule ? '<span class="v-' + v + '">' + esc(rv.small_business_rule) + " · 우리 회사 " + esc(rv.midsize_eligible) + "</span>" : "") + "</div>";
-    }
-    if (!se) return "";
-    if (se.status === "pending") return '<div class="ai-line wait">서버 AI 분석 대기 중 — 다음 실행 때 분석합니다</div>';
-    if (se.status === "error" || se.status === "nofiles") {
-      return '<div class="ai-line bad" title="' + esc(se.error || "") + '">서버 AI 분석 실패' + (se.attempts ? " (" + se.attempts + "회 시도)" : "") + ": " +
-        esc(String(se.error || "").slice(0, 90)) + (String(se.error || "").length > 90 ? "…" : "") + "</div>";
-    }
-    return "";
-  }
-  function monthCost(d) {
-    var ym = C.fmtKst(new Date()).slice(0, 7);
-    return (d.runs || []).filter(function (r) { return C.fmtKst(new Date(r.at)).slice(0, 7) === ym; })
-      .reduce(function (s, r) { return s + (r.cost || 0); }, 0);
-  }
-  function renderSrvStatus() {
-    var el = $("sSrvStatus"), d = SRV.data, h;
-    $("sSrvEdit").href = ghUrl("/edit/main/analysis-config.json");
-    $("sSrvRuns").href = ghUrl("/actions/workflows/analyze.yml");
-    $("sSrvSecrets").href = ghUrl("/settings/secrets/actions");
-    if (SRV.state === "loading" || SRV.state === "idle") h = '<span><span class="spin" aria-hidden="true"></span> 서버 분석 결과를 불러오는 중…</span>';
-    else if (!d) {
-      h = SRV.state === "none"
-        ? '<span class="bad">아직 서버 분석 결과가 없습니다.</span><span>① [API 키 등록(Secrets)]에서 <b>G2B_SERVICE_KEY</b>(공공데이터포털 서비스키)와 <b>ANTHROPIC_API_KEY</b>(Claude API 키)를 등록하고 ② [실행 기록·지금 실행] → <b>Run workflow</b> 를 누르세요. 5~15분 뒤 이 화면을 새로고침하면 결과가 보입니다.</span>'
-        : '<span class="bad">서버 분석 결과를 불러오지 못했습니다: ' + esc(SRV.error) + "</span>";
-    } else {
-      var all = Object.keys(d.items).map(function (k) { return d.items[k]; });
-      function cnt(st) { return all.filter(function (e) { return e.status === st; }).length; }
-      var r0 = (d.runs || [])[0], cfg = d.config || {};
-      h = '<span class="okr">✓ 마지막 서버 실행 <b>' + (r0 ? esc(fmt(isoToKst(r0.at))) + "</b> (" + ago(r0.at) + ")" : "-</b>") +
-        " · 분석 완료 " + cnt("done") + "건 · 대기 " + cnt("pending") + "건 · 실패 " + (cnt("error") + cnt("nofiles")) + "건 · 참가 불가로 건너뜀 " + cnt("skipped") + "건</span>";
-      h += "<span>이번 달 AI 비용 약 $" + monthCost(d).toFixed(2) + " (실행 기록 기준, 실제 청구액은 Anthropic Console 에서 확인)</span>";
-      if (r0 && r0.errors && r0.errors.length) h += '<span class="bad">최근 실행 문제: ' + r0.errors.slice(0, 3).map(esc).join(" / ") + "</span>";
-      if (cfg.keywords) {
-        var cur = draft || S.settings, same = JSON.stringify(C.cleanWords(cfg.keywords)) === JSON.stringify(C.cleanWords(cur.keywords)) &&
-          JSON.stringify(C.cleanWords(cfg.excludes || [])) === JSON.stringify(C.cleanWords(cur.excludes));
-        h += "<span>서버 분석 키워드: " + esc(cfg.keywords.join(", ")) + (same ? "" : ' <b class="bad">(화면 설정과 다름 — 아래 안내대로 맞추세요)</b>') + "</span>";
-      }
-    }
-    el.innerHTML = h;
-  }
-  /** 화면 설정을 analysis-config.json 형식으로 (작성자 이름 등 개인 정보는 넣지 않음) */
-  function analysisConfigText() {
-    var cur = draft || S.settings, base = (SRV.data && SRV.data.config) || {}, co = cur.company || {};
-    var o = {
-      "_설명": "서버 자동 AI 분석 설정입니다. GitHub 에서 이 파일을 열고 연필 아이콘(Edit)으로 고친 뒤 Commit 하면 다음 실행부터 반영됩니다.",
-      keywords: cur.keywords, excludes: cur.excludes, categories: cur.categories,
-      sources: { bid: !!cur.sources.bid, prespec: !!cur.sources.prespec },
-      company: { size: co.size || "중기업", region: co.region || "", codes: co.codes || [] },
-      "_company_설명": "size: 중기업 또는 소기업 / region: 회사 소재지 시·도 (예: 서울특별시, 비우면 지역제한 공고는 '확인 필요') / codes: 나라장터 입찰참가자격 등록 업종코드",
-      analyzeSmall: base.analyzeSmall != null ? base.analyzeSmall : true,
-      "_analyzeSmall_설명": "true 면 추정가격 1억 미만 공고도 분석해 '중기업 참가 가능한 예외 공고'를 찾습니다 (비용 증가)",
-      maxAnalysesPerRun: base.maxAnalysesPerRun || 10,
-      "_maxAnalysesPerRun_설명": "한 번 실행할 때 AI 로 분석할 최대 공고 수 (평일 하루 3번 실행). 넘치는 공고는 다음 실행에 분석",
-      maxAttempts: base.maxAttempts || 3,
-      firstRunDays: 3
-    };
-    return JSON.stringify(o, null, 2) + "\n";
-  }
-
   // ───────────────────────── 설정 창 ─────────────────────────
   var draft = null, draftBase = "";
   function snapshot(o) { return JSON.stringify({ k: o.serviceKey, kw: o.keywords, ex: o.excludes, s: o.sources, c: o.categories, a: o.autoFetch, am: o.autoFetchMinutes, kd: o.keepDays, co: o.company }); }
@@ -659,9 +483,7 @@
     $("sSize").value = draft.company.size || "중기업";
     $("sRegion").value = draft.company.region || "";
     $("sAuthor").value = draft.company.author || "";
-    $("sSrvMsg").textContent = ""; $("sSrvText").hidden = true;
-    renderDraft(); renderSrvStatus();
-    if (SRV.state !== "loading" && Date.now() - SRV.loadedAt > 60e3) refreshServer();
+    renderDraft();
     var dlg = $("settings");
     if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
     if (!draft.serviceKey) setTimeout(function () { $("sKey").focus(); }, 50);
@@ -787,9 +609,7 @@
     $("banners").addEventListener("click", function (e) {
       var b = e.target.closest("[data-act]"); if (!b) return;
       var a = b.dataset.act;
-      if (a === "exit-demo") { S.demo = false; S.items = []; loadItems().then(refreshServer); }
-      else if (a === "srv-setup") { openSettings(); setTimeout(function () { $("sSrvStatus").scrollIntoView({ block: "center" }); }, 80); }
-      else if (a === "srv-hide") { S.meta.hideSrvHint = true; Store.saveMeta(S.meta); renderBanners(); }
+      if (a === "exit-demo") { S.demo = false; S.items = []; loadItems().then(renderAll); }
       else if (a === "suggest-run") { S.suggest = null; runFetch(7); }
       else if (a === "suggest-close") { S.suggest = null; renderBanners(); }
       else if (a === "open-settings") openSettings();
@@ -806,7 +626,7 @@
     $("q").addEventListener("input", function (e) {
       clearTimeout(qt); qt = setTimeout(function () { S.ui.q = e.target.value.trim(); renderList(); }, 120);
     });
-    ["onlyNew", "onlyAi", "hideClosed", "showEx"].forEach(function (id) {
+    ["onlyNew", "hideClosed", "showEx"].forEach(function (id) {
       $(id).addEventListener("change", function (e) { S.ui[id] = e.target.checked; renderList(); });
     });
     $("sort").addEventListener("change", function (e) { S.ui.sort = e.target.value; renderList(); });
@@ -844,11 +664,6 @@
       var show = $("sKey").type === "password"; $("sKey").type = show ? "text" : "password"; $("sKeyShow").textContent = show ? "숨기기" : "보기";
     });
     $("sKeyTest").addEventListener("click", testKey);
-    $("sSrvCopy").addEventListener("click", function () {
-      var text = analysisConfigText();
-      copyText(text).then(function () { $("sSrvMsg").textContent = "분석 설정을 복사했습니다. [분석 설정 고치기]에서 내용을 모두 지우고(Ctrl+A) 붙여넣은 뒤 아래 [Commit changes]를 누르세요."; },
-        function () { $("sSrvText").hidden = false; $("sSrvText").value = text; $("sSrvText").select(); $("sSrvMsg").textContent = "아래 글을 직접 복사(Ctrl+C)하세요."; });
-    });
     $("sKwAdd").addEventListener("click", function () { addWords("keywords", "sKwIn"); });
     function addCodes() {
       var inp = $("sCodeIn"), list = inp.value.split(/[,\s]+/).filter(Boolean), bad = [], added = 0;
@@ -935,11 +750,7 @@
     });
 
     // 오래 열어 둔 탭으로 돌아오면 새 공고 확인
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) return;
-      renderHeader(); maybeAutoFetch();
-      if (!S.demo && SRV.state !== "loading" && Date.now() - SRV.loadedAt > SRV_STALE) refreshServer();
-    });
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) { renderHeader(); maybeAutoFetch(); } });
     function topbarH() { document.documentElement.style.setProperty("--topbar-h", document.querySelector(".topbar").offsetHeight + "px"); }
     window.addEventListener("resize", topbarH); topbarH();
     setInterval(function () { if (!S.busy) renderHeader(); }, 60e3);
@@ -955,6 +766,7 @@
 
   function start() {
     S.settings = Store.loadSettings(C.DEFAULT_SETTINGS);
+    if ("aiKey" in S.settings) { delete S.settings.aiKey; Store.saveSettings(S.settings); }   // 옛 버전(1.2)에서 넣었을 수 있는 Claude API 키 정리
     S.meta = Store.loadMeta();
     $("version").textContent = "· v" + VERSION;
     S.ui.elig = S.settings.eligView || "eligible"; $("elig").value = S.ui.elig;
@@ -963,7 +775,6 @@
     Store.init().then(loadItems).then(function () {
       renderAll();
       maybeAutoFetch();
-      return refreshServer();
     });
   }
 

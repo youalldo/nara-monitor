@@ -201,17 +201,3 @@ test("면허제한·참가가능지역 조회 (공고번호+차수 필수)", asy
   const bad = new C.Client("K", { fetchImpl: fakeFetch(() => [200, JSON.stringify({ "nkoneps.com.response.ResponseError": { header: { resultCode: "08", resultMsg: "필수값 입력 에러" } } })]), sleep: noSleep });
   assert.equal((await C.fetchBidLimits(bad, { no: "X-000" })).ok, false, "오류 응답을 '제한 없음'으로 오인하지 않음");
 });
-
-test("참가자격: 공고문 AI 분석 결과가 금액 추정보다 우선", () => {
-  const smallBid = (review) => Object.assign(bid({ presmptPrce: "60000000" }, { ok: true, lic: ["학술연구용역/1169"], rgn: [] }), review ? { review } : {});
-  assert.equal(C.assess(smallBid(), CO).level, "small");
-  const open = C.assess(smallBid({ small_business_rule: "중소기업 참가(중기업 가능)", small_business_evidence: "중소기업·소상공인 확인서를 소지한 자", midsize_eligible: "가능" }), CO);
-  assert.equal(open.level, "ok", "1억 미만 예외 공고 → 참가 가능");
-  assert.match(open.reasons.join(), /근거: 중소기업·소상공인 확인서/);
-  assert.equal(C.assess(smallBid({ small_business_rule: "기업규모 제한 없음", midsize_eligible: "가능" }), CO).level, "ok");
-  assert.equal(C.assess(smallBid({ small_business_rule: "소기업·소상공인만 참가", small_business_evidence: "소기업 확인서", midsize_eligible: "불가" }), CO).level, "no");
-  assert.equal(C.assess(smallBid({ small_business_rule: "판단 불가", midsize_eligible: "확인 필요" }), CO).level, "small", "판단 불가면 금액 추정 유지");
-  const bigBid = Object.assign(bid({ presmptPrce: "150000000" }, { ok: true, lic: [], rgn: [] }), { review: { small_business_rule: "중소기업 참가(중기업 가능)", midsize_eligible: "확인 필요", check_points: "정량 실적 3억 충족 여부 확인" } });
-  const r = C.assess(bigBid, CO);
-  assert.equal(r.level, "check"); assert.match(r.reasons.join(), /정량 실적 3억/);
-});
