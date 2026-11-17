@@ -1,7 +1,7 @@
 /* 나라장터 키워드 모니터 — 화면 */
 (function () {
   "use strict";
-  var VERSION = "1.0.1";
+  var VERSION = "1.1.0";
   var C = window.NaraCore, Store = window.NaraStore, Demo = window.NaraDemo;
   var KIND = C.KIND_LABEL;
   var WD = ["일", "월", "화", "수", "목", "금", "토"];
@@ -9,7 +9,7 @@
 
   var S = {
     settings: null, meta: {}, items: [], rows: [], demo: false, busy: false, suggest: null,
-    ui: { tab: "all", kws: {}, q: "", onlyNew: false, hideClosed: true, showEx: false, sort: "posted", urgent: false }
+    ui: { tab: "all", kws: {}, q: "", onlyNew: false, hideClosed: true, showEx: false, sort: "posted", urgent: false, elig: "eligible" }
   };
 
   // ───────────────────────── 공통 도우미 ─────────────────────────
@@ -70,6 +70,13 @@
     return Math.round(m / 1440) + "일 전";
   }
   function isNew(it) { return (it.first_seen || "") >= new Date(Date.now() - DAY).toISOString(); }
+  function elig(it) { return C.assess(it, S.settings.company); }
+  function eligVisible(it) {
+    var l = elig(it).level;
+    if (S.ui.elig === "eligible") return l === "ok" || l === "check";
+    if (S.ui.elig === "small") return l !== "no";
+    return true;
+  }
 
   // ───────────────────────── 데이터 처리 ─────────────────────────
   /** 현재 설정으로 모든 항목 재판정. 키워드·수집대상에서 빠졌거나 보관기간이 지난 항목은 정리 */
@@ -127,6 +134,7 @@
       r.items.forEach(function (it) {
         var old = byId[it.id];
         it.first_seen = old ? old.first_seen : runId;
+        if (old && old.limits) it.limits = old.limits;
         if (!old) fresh.push(it);
         byId[it.id] = it;
       });
@@ -142,9 +150,11 @@
       S.meta.errors = r.errors;
       S.meta.lastNew = newShown;
       S.meta.lastRunId = runId;
-      countCalls(client.calls);
-      Store.saveMeta(S.meta);
-      return persistItems(res).then(function () { return { newShown: newShown, errors: r.errors, allFailed: allFailed }; });
+      return enrichLimits(client, S.items).then(function () {
+        countCalls(client.calls);
+        Store.saveMeta(S.meta);
+        return persistItems(res);
+      }).then(function () { return { newShown: newShown, errors: r.errors, allFailed: allFailed }; });
     }).then(function (x) {
       S.busy = false; setBusy(false); S.suggest = null;
       renderAll();
@@ -156,6 +166,22 @@
       Store.saveMeta(S.meta);
       renderAll();
     });
+  }
+
+  /** 키워드에 걸린 입찰공고의 업종(면허)·지역 제한 조회 (공고당 2회 호출, 한 번 성공하면 다시 부르지 않음) */
+  var LIMIT_MAX = 60;
+  function enrichLimits(client, items) {
+    var todo = items.filter(function (it) {
+      return it.kind === "bid" && !it.excluded.length && !isClosed(it) && !(it.limits && it.limits.ok);
+    }).slice(0, LIMIT_MAX);
+    var i = 0;
+    function next() {
+      if (i >= todo.length) return Promise.resolve();
+      var it = todo[i++];
+      setBusy(true, "참가자격(업종·지역 제한) 확인 중… " + i + "/" + todo.length, 0.85 + 0.15 * i / todo.length);
+      return C.fetchBidLimits(client, it).then(function (L) { it.limits = L; }).then(next);
+    }
+    return next();
   }
 
   function maybeAutoFetch() {
@@ -170,6 +196,7 @@
     if (!u.showEx && it.excluded.length) return false;
     if (u.onlyNew && !isNew(it)) return false;
     if (u.hideClosed && it.kind === "bid" && isClosed(it)) return false;
+    if (!eligVisible(it)) return false;
     if (u.urgent) { var d = it.kind === "bid" && dday(it.deadline); if (!d || d.n < 0 || d.n > 3) return false; }
     if (!ignoreKw) {
       var sel = Object.keys(u.kws).filter(function (k) { return u.kws[k]; });
@@ -206,7 +233,9 @@
   function card(it) {
     var closed = it.kind === "bid" && isClosed(it), fresh = isNew(it);
     var h = '<article class="item' + (fresh ? " is-new" : "") + (closed ? " closed" : "") + (it.excluded.length ? " excluded" : "") + '">';
+    var ev = elig(it);
     h += '<div class="row1"><span class="badge k-' + it.kind + '">' + KIND[it.kind] + "</span>";
+    h += '<span class="badge e-' + ev.level + '" title="' + esc(ev.reasons.join(" / ")) + '">' + esc(ev.label) + "</span>";
     if (fresh) h += '<span class="badge b-new">NEW</span>';
     if (it.excluded.length) h += '<span class="badge b-ex">제외어 · ' + esc(it.excluded.join(", ")) + "</span>";
     var kindNm = it.details && it.details["공고종류"];
@@ -228,8 +257,10 @@
     if (it.order_ym) h += '<div class="fact"><span class="l">발주예정</span><span class="v">' + ymLabel(it.order_ym) + "</span></div>";
     h += "</div>";
     var det = it.details || {}, keys = Object.keys(det), files = (it.files || []).filter(function (f) { return safeUrl(f.url); });
-    if (keys.length || files.length) {
-      h += "<details><summary>상세 정보</summary>";
+    {
+      h += "<details><summary>상세 정보 · 참가자격 판단</summary>";
+      h += "<dl><dt>참가자격 판단</dt><dd><b>" + esc(ev.label) + '</b><ul class="elig-why">' +
+           ev.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + "</ul></dd></dl>";
       if (keys.length) {
         h += "<dl>";
         keys.forEach(function (k) {
@@ -283,7 +314,7 @@
   }
 
   function renderTiles() {
-    var vis = S.items.filter(function (it) { return !it.excluded.length; });
+    var vis = S.items.filter(function (it) { return !it.excluded.length && eligVisible(it); });
     function n(f) { return vis.filter(f).length; }
     var tiles = [
       { lbl: "신규 (최근 24시간)", num: n(isNew), cls: "hl", act: "new" },
@@ -313,7 +344,15 @@
     var rows = S.items.filter(function (it) { return passes(it); }).sort(sorter);
     S.rows = rows;
     var sortTxt = { posted: "최신 게시순", deadline: "마감 임박순", amount: "금액 큰 순" }[S.ui.sort];
-    $("info").innerHTML = rows.length.toLocaleString("ko-KR") + "건 표시 중 · " + sortTxt +
+    var hidSmall = 0, hidNo = 0;
+    if (S.ui.elig !== "all") S.items.forEach(function (it) {
+      if (it.excluded.length && !S.ui.showEx) return;
+      var l = elig(it).level;
+      if (l === "no") hidNo++; else if (l === "small" && S.ui.elig === "eligible") hidSmall++;
+    });
+    var hidTxt = (hidSmall || hidNo) ? ' · 참가자격으로 숨긴 공고: ' + (hidSmall ? "1억 미만 " + hidSmall + "건 " : "") + (hidNo ? "참가 불가 " + hidNo + "건 " : "") +
+      '<button class="linkish" type="button" data-act="show-all-elig">모두 보기</button>' : "";
+    $("info").innerHTML = rows.length.toLocaleString("ko-KR") + "건 표시 중 · " + sortTxt + hidTxt +
       (S.ui.urgent ? ' · <b>3일 내 입찰마감만</b> <button class="linkish" type="button" data-act="clear-urgent">해제</button>' : "");
     if (rows.length) { $("list").innerHTML = rows.map(card).join(""); return; }
     var msg;
@@ -321,6 +360,12 @@
       (S.meta.lastAttempt ? "보관 중인 공고가 없습니다. 위의 [지금 조회]로 다시 조회하거나, 기간을 '최근 7일'로 골라 조회해 보세요." : "아직 조회한 공고가 없습니다. 위의 [지금 조회]를 눌러 보세요.");
     else msg = "조건에 맞는 공고가 없습니다." + (S.ui.onlyNew ? " '신규만'을 끄면 보관 중인 전체를 볼 수 있습니다." : "");
     $("list").innerHTML = '<div class="empty">' + msg + "</div>";
+  }
+
+  function setElig(v) {
+    S.ui.elig = v; $("elig").value = v;
+    S.settings.eligView = v; Store.saveSettings(S.settings);
+    renderTiles(); renderList();
   }
 
   function renderAll() {
@@ -333,13 +378,13 @@
 
   // ───────────────────────── 내보내기 ─────────────────────────
   var HEAD = ["구분", "신규", "업무구분", "사업명", "발주/공고기관", "수요/총괄기관", "금액구분", "금액(원)", "게시일시",
-              "마감구분", "마감일시", "발주예정", "매칭키워드", "제외어", "번호", "담당자", "링크"];
-  var WIDTHS = [9, 6, 8, 56, 22, 22, 9, 14, 17, 9, 17, 11, 14, 12, 22, 22, 40];
+              "마감구분", "마감일시", "발주예정", "매칭키워드", "제외어", "번호", "담당자", "링크", "참가자격", "입찰참가범위"];
   function exportRows() {
     return S.rows.map(function (it) {
       return [KIND[it.kind], isNew(it) ? "NEW" : "", it.category, it.title, it.agency, it.demand, it.amount_label,
         it.amount || "", it.posted, it.deadline ? it.deadline_label : "", it.deadline, ymLabel(it.order_ym),
-        it.matched.join(", "), it.excluded.join(", "), it.no, (it.details || {})["담당자"] || "", safeUrl(it.url)];
+        it.matched.join(", "), it.excluded.join(", "), it.no, (it.details || {})["담당자"] || "", safeUrl(it.url),
+        elig(it).label, elig(it).scope];
     });
   }
   function fileStamp() { return C.fmtKst(new Date()).slice(0, 10); }
@@ -368,32 +413,62 @@
     });
     return xlsxPromise;
   }
+  // 사용자가 쓰던 '용역리서칭' 검토 양식과 같은 열 순서·너비 (A열 비움, 2행 제목, S1 '의견')
+  var REVIEW_HEAD = ["업데이트날짜", "입찰공고번호", "입찰진행여부", "작성자", "유형", "키워드", "발주처", "용역명",
+    "사업금액(단위:원,VAT포함)", "과업기간", "접수구분", "가격/제안서 입찰 마감일", "입찰참가범위", "평가비율", "정량점수",
+    "과업내용", "고려/참고 사항", "본공고 확인/소상공인 확인 등"];
+  var REVIEW_WIDTHS = [2, 17, 23, 16, 11, 8, 16, 28, 64, 13, 19, 30, 31, 56, 38, 58, 56, 93, 76];
+  var TYPE_NAME = { bid: "실공고", prespec: "사전규격", orderplan: "발주계획" };
+  function dotDate(x) { return x ? String(x).replace(/-/g, ".") : ""; }
+  function reviewRow(it) {
+    var m = it.meta || {}, d = it.details || {}, ev = elig(it);
+    var vat = it.kind === "bid" ? (m.budget || (m.presmpt ? Math.round(m.presmpt * 1.1) : "")) : (it.amount || "");
+    var period = it.kind === "prespec" ? (m.period || d["납품기한"] || "") : (it.kind === "orderplan" ? "미정" : "");
+    var recv = it.kind === "bid" ? (m.bidMethd || "") : "미정";
+    var due = it.kind === "bid" ? dotDate(it.deadline)
+      : it.kind === "prespec" ? "미정 (사전규격 의견마감 " + dotDate(it.deadline) + ")"
+      : "미정 (발주예정 " + (ymLabel(it.order_ym) || "미정") + ")";
+    var note = [];
+    if (m.cntrctMthd) note.push("계약방법: " + m.cntrctMthd);
+    if (m.sucsfbidMthd) note.push("낙찰방법: " + m.sucsfbidMthd);
+    var officer = m.officer || d["담당자"];
+    if (officer) note.push("담당자: " + officer);
+    if (it.files && it.files.length) note.push("첨부: " + it.files.map(function (f) { return f.name; }).join(", "));
+    if (safeUrl(it.url)) note.push("공고: " + safeUrl(it.url));
+    var why = ev.reasons.filter(function (r) { return !/1억 이상|참여 가능$|충족|제한 없음/.test(r); }).slice(0, 2);
+    return ["", dotDate(C.fmtKst(new Date()).slice(0, 10)), it.no || "", "", (S.settings.company || {}).author || "",
+      TYPE_NAME[it.kind], it.matched.join(", "), it.kind === "orderplan" ? it.agency : (it.demand || it.agency), it.title,
+      vat, period, recv, due, ev.scope, "", "", it.kind === "orderplan" ? (m.usg || "") : "", note.join(" / "),
+      ev.label + (why.length ? " — " + why.join(" / ") : "")];
+  }
   function exportXlsx() {
     if (!S.rows.length) { toast("내보낼 공고가 없습니다"); return; }
     $("xlsxBtn").disabled = true;
     loadXlsx().then(function (X) {
-      var rows = exportRows(), ws = X.utils.aoa_to_sheet([HEAD].concat(rows));
-      ws["!cols"] = WIDTHS.map(function (w) { return { wch: w }; });
-      ws["!autofilter"] = { ref: X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: HEAD.length - 1 } }) };
-      rows.forEach(function (r, i) {
-        if (!r[16]) return;
-        var cell = ws[X.utils.encode_cell({ r: i + 1, c: 3 })];
-        if (cell) cell.l = { Target: r[16] };
-      });
-      rows.forEach(function (r, i) {
-        var cell = ws[X.utils.encode_cell({ r: i + 1, c: 7 })];
-        if (cell && typeof cell.v === "number") cell.z = "#,##0";
+      var rows = S.rows.map(reviewRow), blank = [];
+      for (var i = 0; i < 18; i++) blank.push("");
+      var aoa = [blank.concat(["의견"]), [""].concat(REVIEW_HEAD)].concat(rows);
+      var ws = X.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = REVIEW_WIDTHS.map(function (w) { return { wch: w }; });
+      ws["!autofilter"] = { ref: X.utils.encode_range({ s: { r: 1, c: 1 }, e: { r: rows.length + 1, c: 18 } }) };
+      S.rows.forEach(function (it, i) {
+        var u = safeUrl(it.url), r = i + 2;
+        var t = ws[X.utils.encode_cell({ r: r, c: 8 })];
+        if (u && t) t.l = { Target: u };
+        var a = ws[X.utils.encode_cell({ r: r, c: 9 })];
+        if (a && typeof a.v === "number") a.z = "#,##0";
       });
       var wb = X.utils.book_new();
-      X.utils.book_append_sheet(wb, ws, "공고목록");
-      X.writeFile(wb, "nara_" + fileStamp() + ".xlsx");
+      X.utils.book_append_sheet(wb, ws, "용역리서칭");
+      X.writeFile(wb, "nara_review_" + fileStamp() + ".xlsx");
+      toast("검토양식으로 " + rows.length + "건을 저장했습니다");
     }).catch(function (e) { toast(e.message + " — CSV 로 내려받아 주세요", 4000); })
       .then(function () { $("xlsxBtn").disabled = false; });
   }
 
   // ───────────────────────── 설정 창 ─────────────────────────
   var draft = null, draftBase = "";
-  function snapshot(o) { return JSON.stringify({ k: o.serviceKey, kw: o.keywords, ex: o.excludes, s: o.sources, c: o.categories, a: o.autoFetch, am: o.autoFetchMinutes, kd: o.keepDays }); }
+  function snapshot(o) { return JSON.stringify({ k: o.serviceKey, kw: o.keywords, ex: o.excludes, s: o.sources, c: o.categories, a: o.autoFetch, am: o.autoFetchMinutes, kd: o.keepDays, co: o.company }); }
 
   function openSettings() {
     draft = JSON.parse(JSON.stringify(S.settings)); draft._added = {};
@@ -404,6 +479,10 @@
     $("sAuto").checked = !!draft.autoFetch;
     $("sAutoMin").value = String(draft.autoFetchMinutes);
     $("sKeep").value = String(draft.keepDays);
+    draft.company = draft.company || JSON.parse(JSON.stringify(C.DEFAULT_SETTINGS.company));
+    $("sSize").value = draft.company.size || "중기업";
+    $("sRegion").value = draft.company.region || "";
+    $("sAuthor").value = draft.company.author || "";
     renderDraft();
     var dlg = $("settings");
     if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
@@ -422,6 +501,10 @@
     }
     $("sKwChips").innerHTML = chips("keywords", "");
     $("sExChips").innerHTML = chips("excludes", "ex");
+    $("sCodeChips").innerHTML = draft.company.codes.length ? draft.company.codes.map(function (c, i) {
+      return '<span class="wchip code">' + esc(c) + (C.INDUSTRY_NAMES[c] ? " " + esc(C.INDUSTRY_NAMES[c]) : "") +
+             '<button type="button" aria-label="' + esc(c) + ' 삭제" title="삭제" data-del="codes" data-i="' + i + '">×</button></span>';
+    }).join("") : '<span class="note">업종코드가 없으면 업종제한 공고는 모두 \'참가 불가\'로 판정됩니다.</span>';
     $("sKwN").textContent = draft.keywords.length + "개";
     $("sExN").textContent = draft.excludes.length + "개";
     $("sSources").innerHTML = ["bid", "prespec", "orderplan"].map(function (k) {
@@ -547,8 +630,10 @@
       $(id).addEventListener("change", function (e) { S.ui[id] = e.target.checked; renderList(); });
     });
     $("sort").addEventListener("change", function (e) { S.ui.sort = e.target.value; renderList(); });
+    $("elig").addEventListener("change", function (e) { setElig(e.target.value); });
     $("info").addEventListener("click", function (e) {
       if (e.target.closest("[data-act='clear-urgent']")) { S.ui.urgent = false; renderList(); }
+      if (e.target.closest("[data-act='show-all-elig']")) { setElig("all"); }
     });
     $("tiles").addEventListener("click", function (e) {
       var b = e.target.closest("button[data-tile]"); if (!b) return;
@@ -580,6 +665,18 @@
     });
     $("sKeyTest").addEventListener("click", testKey);
     $("sKwAdd").addEventListener("click", function () { addWords("keywords", "sKwIn"); });
+    function addCodes() {
+      var inp = $("sCodeIn"), list = inp.value.split(/[,\s]+/).filter(Boolean), bad = [], added = 0;
+      list.forEach(function (c) {
+        if (!/^\d{4}$/.test(c)) { bad.push(c); return; }
+        if (draft.company.codes.indexOf(c) < 0) { draft.company.codes.push(c); added++; }
+      });
+      inp.value = ""; renderDraft();
+      toast(bad.length ? "업종코드는 숫자 4자리입니다: " + bad.join(", ") : (added ? added + "개 추가 — [저장]을 눌러야 반영됩니다" : "이미 있는 업종코드입니다"));
+    }
+    $("sCodeAdd").addEventListener("click", addCodes);
+    $("sCodeIn").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addCodes(); } });
+    $("sAuthor").addEventListener("input", function () { if (draft) { draft.company.author = $("sAuthor").value.trim(); renderDraft(); } });
     $("sExAdd").addEventListener("click", function () { addWords("excludes", "sExIn"); });
     [["sKwIn", "keywords"], ["sExIn", "excludes"]].forEach(function (p) {
       $(p[0]).addEventListener("keydown", function (e) {
@@ -588,8 +685,8 @@
     });
     $("settings").addEventListener("click", function (e) {
       var b = e.target.closest("button[data-del]"); if (!b || !draft) return;
-      var key = b.dataset.del, w = draft[key][+b.dataset.i];
-      draft[key].splice(+b.dataset.i, 1); renderDraft();
+      var key = b.dataset.del, arr = key === "codes" ? draft.company.codes : draft[key], w = arr[+b.dataset.i];
+      arr.splice(+b.dataset.i, 1); renderDraft();
       toast("'" + w + "' 삭제 — [저장]을 눌러야 반영됩니다");
     });
     $("settings").addEventListener("change", function (e) {
@@ -603,6 +700,8 @@
       } else if (t.id === "sAuto") draft.autoFetch = t.checked;
       else if (t.id === "sAutoMin") draft.autoFetchMinutes = +t.value;
       else if (t.id === "sKeep") draft.keepDays = +t.value;
+      else if (t.id === "sSize") draft.company.size = t.value;
+      else if (t.id === "sRegion") draft.company.region = t.value;
       renderDraft();
     });
     $("sExport").addEventListener("click", function () {
@@ -619,6 +718,11 @@
         if (st.sources) ["bid", "prespec", "orderplan"].forEach(function (k) { draft.sources[k] = !!st.sources[k]; });
         if (typeof st.serviceKey === "string" && st.serviceKey) { draft.serviceKey = st.serviceKey.trim(); $("sKey").value = draft.serviceKey; }
         ["autoFetch", "autoFetchMinutes", "keepDays"].forEach(function (k) { if (st[k] != null) draft[k] = st[k]; });
+        if (st.company && Array.isArray(st.company.codes)) {
+          draft.company = { size: st.company.size || "중기업", region: st.company.region || "", author: st.company.author || "",
+                            codes: st.company.codes.filter(function (c) { return /^\d{4}$/.test(c); }) };
+          $("sSize").value = draft.company.size; $("sRegion").value = draft.company.region; $("sAuthor").value = draft.company.author;
+        }
         $("sAuto").checked = !!draft.autoFetch; $("sAutoMin").value = String(draft.autoFetchMinutes); $("sKeep").value = String(draft.keepDays);
         renderDraft(); $("sImportBox").hidden = true;
         $("sMsg").textContent = "설정을 불러왔습니다. 확인 후 [저장]을 누르세요.";
@@ -664,6 +768,8 @@
     S.settings = Store.loadSettings(C.DEFAULT_SETTINGS);
     S.meta = Store.loadMeta();
     $("version").textContent = "· v" + VERSION;
+    S.ui.elig = S.settings.eligView || "eligible"; $("elig").value = S.ui.elig;
+    $("sRegion").innerHTML = '<option value="">선택 안 함</option>' + C.REGION_NAMES.map(function (r) { return '<option value="' + r + '">' + r + "</option>"; }).join("");
     bind();
     Store.init().then(loadItems).then(function () {
       renderAll();

@@ -151,3 +151,53 @@ test("연결 점검", async () => {
   assert.deepEqual(res.map((x) => [x.key, x.ok]), [["bid", true], ["prespec", true], ["orderplan", true]]);
   assert.equal(client.rows, 500, "점검 후 원래 설정 복구");
 });
+
+// ───────── 참가자격 판정 ─────────
+const CO = { size: "중기업", region: "서울특별시", codes: ["1169", "1426", "1468", "1469", "1470", "9901", "9999"] };
+const bid = (raw, limits) => Object.assign(C.normalizeBid(Object.assign({ bidNtceNo: "R26BK00000077", bidNtceOrd: "000", bidNtceNm: "조직진단 용역" }, raw), "용역"), limits ? { limits } : {});
+
+test("참가자격: 금액 기준 (추정가격 1억)", () => {
+  const ok = { ok: true, lic: [], rgn: [] };
+  assert.equal(C.assess(bid({ presmptPrce: "100000000" }, ok), CO).level, "ok");
+  assert.equal(C.assess(bid({ presmptPrce: "99999999" }, ok), CO).level, "small");
+  assert.equal(C.assess(bid({ asignBdgtAmt: "110000000" }, ok), CO).level, "ok", "추정가격 없으면 배정예산÷1.1");
+  assert.equal(C.assess(bid({ asignBdgtAmt: "109000000" }, ok), CO).level, "small");
+  assert.equal(C.assess(bid({ presmptPrce: "50000000" }, ok), Object.assign({}, CO, { size: "소기업" })).level, "ok", "소기업은 1억 미만 참가 가능");
+  assert.equal(C.assess(bid({}, ok), CO).level, "check", "금액 미공개");
+  const pre = C.normalizePrespec({ bfSpecRgstNo: "R26BD1", prdctClsfcNoNm: "경영전략 수립", asignBdgtAmt: "110000000" }, "용역");
+  assert.equal(C.assess(pre, CO).label, "참가 가능(금액 기준)");
+  const pre2 = C.normalizePrespec({ bfSpecRgstNo: "R26BD2", prdctClsfcNoNm: "경영전략 수립", asignBdgtAmt: "80000000" }, "용역");
+  assert.equal(C.assess(pre2, CO).level, "small");
+});
+
+test("참가자격: 업종·지역·실적 제한", () => {
+  const big = { presmptPrce: "150000000" };
+  assert.equal(C.assess(bid(big, { ok: true, lic: ["학술연구용역/1169"], rgn: [] }), CO).level, "ok");
+  const no = C.assess(bid(big, { ok: true, lic: ["엔지니어링사업/1144"], rgn: [] }), CO);
+  assert.equal(no.level, "no"); assert.match(no.reasons.join(), /업종제한 미충족/);
+  assert.equal(C.assess(bid(big, { ok: true, lic: ["학술연구용역/1169", "엔지니어링사업/1144"], rgn: [] }), CO).level, "ok", "하나라도 보유하면 충족");
+  assert.equal(C.assess(bid(big, { ok: true, lic: [], rgn: ["서울특별시"] }), CO).level, "ok");
+  assert.equal(C.assess(bid(big, { ok: true, lic: [], rgn: ["경상남도 창원시"] }), CO).level, "no");
+  assert.equal(C.assess(bid(big, { ok: true, lic: [], rgn: ["경상남도"] }), Object.assign({}, CO, { region: "" })).level, "check", "소재지 미설정");
+  assert.equal(C.assess(bid(Object.assign({ arsltCmptYn: "Y" }, big), { ok: true, lic: [], rgn: [] }), CO).level, "check", "실적제한");
+  assert.equal(C.assess(bid(big), CO).level, "check", "업종·지역 미확인");
+  assert.equal(C.assess(bid({ presmptPrce: "50000000" }, { ok: true, lic: ["엔지니어링사업/1144"], rgn: [] }), CO).level, "no", "불가가 우선");
+  assert.equal(C.regionKey("전라북도 전주시"), "전북"); assert.equal(C.regionKey("전북특별자치도"), "전북");
+  assert.equal(C.regionKey("충청남도 공주시"), "충남"); assert.equal(C.regionKey("서울특별시"), "서울");
+});
+
+test("면허제한·참가가능지역 조회 (공고번호+차수 필수)", async () => {
+  const f = fakeFetch((op, p) => {
+    if (op === "getBidPblancListInfoLicenseLimit") return [200, ok([{ lcnsLmtNm: "학술연구용역/1169", bidNtceNo: p.bidNtceNo }])];
+    if (op === "getBidPblancListInfoPrtcptPsblRgn") return [200, JSON.stringify({ response: { header: { resultCode: "03", resultMsg: "NODATA" } } })];
+    return [404, "API not found"];
+  });
+  const client = new C.Client("K", { fetchImpl: f, sleep: noSleep });
+  const L = await C.fetchBidLimits(client, { no: "R26BK00000077-001" });
+  assert.deepEqual([L.ok, L.lic, L.rgn], [true, ["학술연구용역/1169"], []]);
+  assert.equal(f.calls[0].params.inqryDiv, "2");
+  assert.equal(f.calls[0].params.bidNtceNo, "R26BK00000077");
+  assert.equal(f.calls[0].params.bidNtceOrd, "001");
+  const bad = new C.Client("K", { fetchImpl: fakeFetch(() => [200, JSON.stringify({ "nkoneps.com.response.ResponseError": { header: { resultCode: "08", resultMsg: "필수값 입력 에러" } } })]), sleep: noSleep });
+  assert.equal((await C.fetchBidLimits(bad, { no: "X-000" })).ok, false, "오류 응답을 '제한 없음'으로 오인하지 않음");
+});

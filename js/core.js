@@ -35,7 +35,11 @@
     firstRunDays: 7,
     keepDays: 60,
     autoFetch: true,
-    autoFetchMinutes: 60
+    autoFetchMinutes: 60,
+    // 참가자격 판정용 회사 정보 (업종코드는 '나라장터 및 직접생산확인증명서 구비현황' 기준)
+    company: { size: "중기업", region: "", author: "",
+               codes: ["1169", "1426", "1468", "1469", "1470", "9901", "9999"] },
+    eligView: "eligible"
   };
 
   // ───────────────────────── 오류 ─────────────────────────
@@ -282,7 +286,18 @@
         "낙찰방법": first(raw, "sucsfbidMthdNm"),
         "개찰일시": normDt(raw.opengDt),
         "배정예산": budget && presmpt ? fmtWon(budget) : "",
+        "입찰방식": first(raw, "bidMethdNm"),
+        "공동수급": first(raw, "cmmnSpldmdMethdNm"),
+        "참가자격 등록마감": normDt(raw.bidQlfctRgstDt),
         "담당자": phoneJoin(first(raw, "ntceInsttOfclNm"), first(raw, "ntceInsttOfclTelNo"))
+      },
+      meta: {
+        presmpt: presmpt, budget: budget,
+        bidMethd: first(raw, "bidMethdNm"), cntrctMthd: first(raw, "cntrctCnclsMthdNm"),
+        sucsfbidMthd: first(raw, "sucsfbidMthdNm"), joint: first(raw, "cmmnSpldmdMethdNm"),
+        arslt: s(raw.arsltCmptYn).toUpperCase(), dsgnt: s(raw.dsgntCmptYn).toUpperCase(),
+        indLmt: s(raw.indstrytyLmtYn).toUpperCase(), rgnBasis: first(raw, "rgnLmtBidLocplcJdgmBssNm"),
+        officer: phoneJoin(first(raw, "ntceInsttOfclNm"), first(raw, "ntceInsttOfclTelNo"))
       }
     });
   }
@@ -308,6 +323,11 @@
         "납품기한": normDt(raw.dlvrTmlmtDt) || (days ? days + "일" : ""),
         "관련 입찰공고": splitList(raw.bidNtceNoList).join(", "),
         "담당자": phoneJoin(first(raw, "ofclNm"), first(raw, "ofclTelNo"))
+      },
+      meta: {
+        budget: toAmount(raw.asignBdgtAmt),
+        period: normDt(raw.dlvrTmlmtDt) || (days ? days + "일" : ""),
+        officer: phoneJoin(first(raw, "ofclNm"), first(raw, "ofclTelNo"))
       }
     });
   }
@@ -349,6 +369,12 @@
         "담당자": phoneJoin(first(raw, "ofclNm"), first(raw, "telNo")),
         "용도·내용": first(raw, "usgCntnts", "specCntnts").slice(0, 300),
         "관련 입찰공고": splitList(raw.bidNtceNoList).join(", ")
+      },
+      meta: {
+        budget: toAmount(raw.sumOrderAmt) || toAmount(raw.orderContrctAmt),
+        usg: first(raw, "usgCntnts", "specCntnts").slice(0, 500),
+        cntrctMthd: first(raw, "cntrctMthdNm"),
+        officer: [first(raw, "deptNm"), phoneJoin(first(raw, "ofclNm"), first(raw, "telNo"))].filter(Boolean).join(" ")
       }
     });
   }
@@ -572,6 +598,112 @@
     });
   }
 
+  // ───────────────────────── 참가자격 판정 ─────────────────────────
+  // 판로지원법: 추정가격 1억원(부가세 제외) 미만 물품·용역은 소기업·소상공인과 우선 조달 → 중기업은 원칙적으로 참가 불가.
+  // 예외(제한 미적용)는 공고문에만 적혀 있어 API 로는 알 수 없다 → '1억 미만·소기업 제한 추정'으로 따로 분류한다.
+  var SMALL_LIMIT = 100000000;
+  var INDUSTRY_NAMES = { "1169": "학술·연구용역", "1426": "SW(패키지SW개발·공급)", "1468": "SW(컴퓨터관련서비스)",
+    "1469": "SW(디지털콘텐츠개발)", "1470": "SW(DB제작·검색)", "9901": "기타자유업(행사대행)", "9999": "기타자유업종" };
+  var REGIONS = [["서울", "서울"], ["부산", "부산"], ["대구", "대구"], ["인천", "인천"], ["광주", "광주"], ["대전", "대전"],
+    ["울산", "울산"], ["세종", "세종"], ["경기", "경기"], ["강원", "강원"], ["충북", "충청북"], ["충남", "충청남"],
+    ["전북", "전라북", "전북"], ["전남", "전라남"], ["경북", "경상북"], ["경남", "경상남"], ["제주", "제주"]];
+  var REGION_NAMES = ["서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시",
+    "세종특별자치시", "경기도", "강원특별자치도", "충청북도", "충청남도", "전북특별자치도", "전라남도", "경상북도",
+    "경상남도", "제주특별자치도"];
+  function regionKey(name) {
+    var n = s(name).replace(/\s+/g, "");
+    for (var i = 0; i < REGIONS.length; i++) {
+      for (var j = 1; j < REGIONS[i].length; j++) if (n.indexOf(REGIONS[i][j]) === 0) return REGIONS[i][0];
+      if (n.indexOf(REGIONS[i][0]) === 0) return REGIONS[i][0];
+    }
+    return "";
+  }
+  function licCodes(names) {
+    var out = [];
+    (names || []).forEach(function (n) { (s(n).match(/\d{4}/g) || []).forEach(function (c) { if (out.indexOf(c) < 0) out.push(c); }); });
+    return out;
+  }
+
+  /** 입찰공고 1건의 면허(업종)제한·참가가능지역 조회. 공고번호와 차수(bidNtceOrd)가 반드시 필요하다. */
+  function fetchBidLimits(client, item) {
+    var parts = s(item.no).split("-"), no = parts[0], ord = /^\d{1,3}$/.test(parts[1] || "") ? parts[1] : "000";
+    var base = BASE_URL + "/ad/BidPublicInfoService/";
+    function ask(op, pick) {
+      var q = { serviceKey: client.key, type: "json", pageNo: 1, numOfRows: 100, inqryDiv: "2", bidNtceNo: no, bidNtceOrd: ord };
+      return client.call(base + op, q).then(function (r) {
+        var names = [];
+        r.items.forEach(function (it) { pick(it).forEach(function (v) { v = s(v); if (v && names.indexOf(v) < 0) names.push(v); }); });
+        return { ok: true, names: names };
+      }, function (e) { return { ok: false, names: [], error: e && e.message || String(e) }; });
+    }
+    return ask("getBidPblancListInfoLicenseLimit", function (it) { return [it.lcnsLmtNm, it.permsnIndstrytyList]; })
+      .then(function (lic) {
+        return ask("getBidPblancListInfoPrtcptPsblRgn", function (it) { return [it.prtcptPsblRgnNm]; }).then(function (rgn) {
+          return { ok: lic.ok && rgn.ok, lic: lic.names, rgn: rgn.names, error: lic.error || rgn.error || "", at: new Date().toISOString() };
+        });
+      });
+  }
+
+  /** 금액 기준(부가세 제외 추정가격). 입찰공고는 추정가격, 그 외는 부가세 포함 금액 ÷ 1.1 */
+  function priceBasis(it) {
+    var m = it.meta || {};
+    if (it.kind === "bid") {
+      if (m.presmpt) return { v: m.presmpt, how: "추정가격" };
+      if (m.budget) return { v: Math.round(m.budget / 1.1), how: "배정예산÷1.1" };
+      return null;
+    }
+    var amt = m.budget || it.amount;
+    return amt ? { v: Math.round(amt / 1.1), how: (it.kind === "prespec" ? "배정예산" : "발주금액") + "÷1.1" } : null;
+  }
+
+  var ELIG_LABEL = { ok: "참가 가능", check: "확인 필요", small: "1억 미만·소기업 제한 추정", no: "참가 불가" };
+  var ELIG_RANK = { ok: 0, check: 1, small: 2, no: 3 };
+
+  /** 참가자격 판정 → { level: ok|check|small|no, label, reasons[], scope(입찰참가범위 요약) } */
+  function assess(it, company) {
+    company = company || {};
+    var level = "ok", reasons = [], scope = [];
+    function bump(l) { if (ELIG_RANK[l] > ELIG_RANK[level]) level = l; }
+    var pb = priceBasis(it), small = company.size === "소기업";
+    if (!pb) { bump("check"); reasons.push("금액 미공개 — 공고문에서 참가자격 확인"); scope.push("금액 미공개"); }
+    else if (pb.v < SMALL_LIMIT && !small) {
+      bump("small");
+      reasons.push(pb.how + " " + fmtWon(pb.v) + " → 1억 미만이라 소기업·소상공인 제한일 가능성이 큽니다. 제한이 없는 예외 공고인지 공고문에서 확인하세요.");
+      scope.push("1억 미만 → 소기업·소상공인 제한 추정(공고문 확인)");
+    } else {
+      reasons.push(pb.v < SMALL_LIMIT ? "1억 미만 — 소기업·소상공인 참여 가능" : pb.how + " 1억 이상 — 중소기업 제한이 있어도 중기업 참여 가능");
+      scope.push(pb.v < SMALL_LIMIT ? "1억 미만(소기업 참여 가능)" : "1억 이상(중소기업 제한 시에도 중기업 참여 가능)");
+    }
+    if (it.kind !== "bid") {
+      reasons.push(it.kind === "prespec" ? "업종·지역 제한은 본공고에서 확인" : "발주계획 — 참가자격은 공고가 나오면 확인");
+      return { level: level, label: level === "ok" ? "참가 가능(금액 기준)" : ELIG_LABEL[level], reasons: reasons, scope: scope.join(" / ") + " / 업종·지역은 본공고 확인" };
+    }
+    var m = it.meta || {}, L = it.limits;
+    if (m.arslt === "Y") { bump("check"); reasons.push("실적제한 경쟁 — 수행실적 요건 확인"); scope.push("실적제한"); }
+    if (m.dsgnt === "Y") { bump("check"); reasons.push("지정경쟁 — 지정 대상 여부 확인"); scope.push("지정경쟁"); }
+    if (!L) { bump("check"); reasons.push("업종·지역 제한을 아직 확인하지 못했습니다 (다음 조회 때 확인)"); scope.push("업종·지역 미확인"); }
+    else if (!L.ok) { bump("check"); reasons.push("업종·지역 제한 조회 실패 — 공고문 확인 (" + L.error + ")"); scope.push("업종·지역 조회 실패"); }
+    else {
+      if (L.lic.length) {
+        var codes = licCodes(L.lic), have = company.codes || [];
+        var hit = codes.filter(function (c) { return have.indexOf(c) >= 0; });
+        if (!codes.length) { bump("check"); reasons.push("업종제한: " + L.lic.join(", ") + " — 보유 여부 확인"); }
+        else if (hit.length) reasons.push("업종제한 충족 — 보유 업종 " + hit.map(function (c) { return (INDUSTRY_NAMES[c] || "업종") + "(" + c + ")"; }).join(", "));
+        else { bump("no"); reasons.push("업종제한 미충족 — 요구 업종: " + L.lic.join(", ")); }
+        scope.push("업종: " + L.lic.join(", "));
+      } else { reasons.push("업종제한 없음"); scope.push("업종제한 없음"); }
+      if (L.rgn.length) {
+        var mine = regionKey(company.region);
+        if (!mine) { bump("check"); reasons.push("지역제한: " + L.rgn.join(", ") + " — [설정]에서 회사 소재지를 고르면 자동 판정합니다"); }
+        else if (L.rgn.some(function (r) { return regionKey(r) === mine; })) reasons.push("지역제한 충족 (" + L.rgn.join(", ") + ")");
+        else { bump("no"); reasons.push("지역제한 미충족 — 참가 가능 지역: " + L.rgn.join(", ")); }
+        scope.push("지역: " + L.rgn.join(", "));
+      } else scope.push("지역제한 없음");
+    }
+    if (m.joint) scope.push("공동수급: " + m.joint);
+    return { level: level, label: ELIG_LABEL[level], reasons: reasons, scope: scope.join(" / ") };
+  }
+
   /** 연결 점검: 각 API 에 1건만 요청해 활용신청·키 상태 확인 */
   function checkConnection(client, settings, now) {
     var cat = settings.categories[0] || "용역", start = addDays(kstMidnight(now), -1), results = [];
@@ -608,6 +740,8 @@
     normDt: normDt, toAmount: toAmount, normalizeBid: normalizeBid, normalizePrespec: normalizePrespec,
     normalizeOrderplan: normalizeOrderplan,
     Matcher: Matcher, cleanWords: cleanWords, squash: squash,
-    Client: Client, collect: collect, checkConnection: checkConnection
+    Client: Client, collect: collect, checkConnection: checkConnection,
+    fetchBidLimits: fetchBidLimits, assess: assess, priceBasis: priceBasis, regionKey: regionKey,
+    INDUSTRY_NAMES: INDUSTRY_NAMES, REGION_NAMES: REGION_NAMES, ELIG_LABEL: ELIG_LABEL, SMALL_LIMIT: SMALL_LIMIT
   };
 });

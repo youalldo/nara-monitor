@@ -199,3 +199,13 @@ dialog::backdrop{background:rgba(10,14,22,.45)}
   h1{font-size:18px}
   .dlg-body{padding-inline:16px}
 }
+
+/* 참가자격 배지 */
+.e-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 13%,transparent)}
+.e-check{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.e-small{color:var(--muted);background:var(--surface-2)}
+.e-no{color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,transparent)}
+.elig-why{margin:0;padding-left:18px}
+.elig-why li{margin:2px 0}
+.inline-input{flex:0 1 220px;min-width:0;font:inherit;font-size:14px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)}
+.wchip.code{background:var(--plan-bg);color:var(--plan)}

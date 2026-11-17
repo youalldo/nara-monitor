@@ -43,18 +43,23 @@
         it.no = no; it.deadline = C.fmtKst(new Date(C.addDays(today, due).getTime() + 10 * 3600e3));
         it.deadline_label = "입찰마감"; it.amount_label = "추정가격"; it.url = "https://www.g2b.go.kr";
         it.files = [{ name: "제안요청서.hwp", url: "https://www.g2b.go.kr" }, { name: "과업지시서.pdf", url: "https://www.g2b.go.kr" }];
-        it.details = { "공고번호": no, "공고종류": "등록공고", "계약방법": "제한경쟁", "낙찰방법": "협상에 의한 계약", "담당자": "홍길동 (02-000-0000)" };
+        it.details = { "공고번호": no, "공고종류": "등록공고", "계약방법": "제한경쟁", "낙찰방법": "협상에 의한 계약", "입찰방식": "전자입찰", "담당자": "홍길동 (02-000-0000)" };
+        it.meta = { presmpt: r[4], budget: Math.round(r[4] * 1.1), bidMethd: "전자입찰", cntrctMthd: "제한경쟁",
+                    sucsfbidMthd: "협상에 의한 계약", officer: "홍길동 (02-000-0000)" };
+        it.limits = { ok: true, lic: [n === 5 ? "엔지니어링사업/1144" : "학술연구용역/1169"], rgn: [] };
       } else if (kind === "prespec") {
         no = "R26BD9" + String(n).padStart(7, "0");
         it.no = no; it.deadline = C.fmtKst(new Date(C.addDays(today, due).getTime() + 18 * 3600e3));
         it.deadline_label = "의견마감"; it.amount_label = "배정예산";
         it.files = [{ name: "규격문서 1", url: "https://www.g2b.go.kr" }];
         it.details = { "사전규격번호": no, "업무구분": "용역", "담당자": "김예시 (000-000-0000)" };
+        it.meta = { budget: r[4], period: "착수일로부터 6개월", officer: "김예시 (000-000-0000)" };
       } else {
         no = "R26DD9" + String(n).padStart(7, "0");
         var ym = C.ymAdd(now, due);
         it.no = no; it.order_ym = ym.slice(0, 4) + "-" + ym.slice(4); it.amount_label = "발주금액";
         it.details = { "발주계획번호": no, "발주예정": ym.slice(0, 4) + "년 " + parseInt(ym.slice(4), 10) + "월", "계약방법": "협상에 의한 계약", "담당부서": "기획예산팀" };
+        it.meta = { budget: r[4], usg: "기관 중장기 전략체계 재정립 및 실행과제 도출", cntrctMthd: "협상에 의한 계약", officer: "기획예산팀 이예시 (000-000-0000)" };
       }
       out.push(it);
     });
