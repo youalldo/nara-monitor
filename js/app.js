@@ -1,7 +1,7 @@
 /* 나라장터 키워드 모니터 — 화면 */
 (function () {
   "use strict";
-  var VERSION = "1.0.0";
+  var VERSION = "1.0.1";
   var C = window.NaraCore, Store = window.NaraStore, Demo = window.NaraDemo;
   var KIND = C.KIND_LABEL;
   var WD = ["일", "월", "화", "수", "목", "금", "토"];
