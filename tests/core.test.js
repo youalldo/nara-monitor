@@ -1,4 +1,4 @@
-// 실행: node --test tests/   (네트워크 불필요 — 가짜 API 응답 사용)
+// 실행: 저장소 폴더에서 node --test   (네트워크 불필요 — 가짜 API 응답 사용)
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const C = require("../js/core.js");

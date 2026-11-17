@@ -93,6 +93,6 @@
 - 순수 HTML/CSS/JavaScript, 빌드 과정 없음. GitHub Pages(루트 폴더)로 배포합니다.
 - `js/core.js` API 호출·응답 해석·키워드·참가자격 판정 (브라우저/Node 공용) · `js/app.js` 화면 · `js/store.js` 저장(IndexedDB/localStorage) · `js/demo.js` 예시 데이터
 - `js/docread.js` HWP·HWPX·DOCX·TXT 글자 추출 · `js/ai.js` Claude API 요청(구조화 출력, 공식 SDK `vendor/anthropic-sdk-1.4.0.min.js` — `@anthropic-ai/sdk` 1.4.0 을 esbuild 로 묶은 것, MIT/Apache-2.0)
-- 테스트: `node --test tests/`
+- 테스트: 저장소 폴더에서 `node --test`
 - 배포 후 브라우저 캐시 때문에 옛 파일이 보이지 않도록, 바꿀 때마다 `index.html` 의 `?v=` 값과 `js/app.js` 의 `VERSION` 을 올립니다.
 - `vendor/xlsx-0.18.5.full.min.js` 는 SheetJS Community Edition (Apache-2.0, `vendor/xlsx-LICENSE.txt`) — 엑셀 버튼을 누를 때만 불러옵니다.

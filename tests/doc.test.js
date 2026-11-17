@@ -1,4 +1,4 @@
-// 실행: node --test tests/   (공고문 파일 읽기·AI 요청 구성 — 네트워크 불필요)
+// 실행: 저장소 폴더에서 node --test   (공고문 파일 읽기·AI 요청 구성 — 네트워크 불필요)
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const zlib = require("node:zlib");
