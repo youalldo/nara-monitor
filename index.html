@@ -6,7 +6,7 @@
 <title>나라장터 키워드 모니터</title>
 <meta name="description" content="나라장터 입찰공고·사전규격·발주계획을 키워드로 모아 보는 화면">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232251cc'/%3E%3Cpath d='M9 22V10l14 12V10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/app.css?v=1.1.0">
+<link rel="stylesheet" href="css/app.css?v=1.2.0">
 </head>
 <body>
 
@@ -156,6 +156,19 @@
       </section>
 
       <section class="sec">
+        <h3>공고문 AI 분석 (Claude API)</h3>
+        <p class="note">공고 카드의 <b>[공고문 AI 분석]</b>에 공고문·제안요청서 파일을 끌어다 놓으면 AI 가 평가비율·정량점수·과업내용·기업규모 제한 등을 검토양식에 채웁니다.
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic Console ↗</a>에서 API 키를 만들고 결제 수단을 등록해야 합니다. 한 건 분석에 보통 수백 원이 듭니다.</p>
+        <div class="key-row">
+          <input id="sAiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+          <button class="btn" type="button" id="sAiKeyShow">보기</button>
+          <button class="btn" type="button" id="sAiKeyTest">키 확인</button>
+        </div>
+        <div id="sAiKeyResult" class="check-result"></div>
+        <p class="note">키는 이 브라우저에만 저장되고 api.anthropic.com 에만 보냅니다. Console 에서 이 용도 전용 키를 만들고 월 지출 한도를 걸어 두기를 권합니다.</p>
+      </section>
+
+      <section class="sec">
         <h3>자동 조회 · 보관</h3>
         <label class="line"><input type="checkbox" id="sAuto"> 이 화면을 열면 새 공고를 자동으로 조회</label>
         <label class="line">마지막 조회 후
@@ -193,11 +206,52 @@
   </form>
 </dialog>
 
+<dialog id="analyze" aria-labelledby="anTitle">
+  <div class="dlg">
+    <div class="dlg-head">
+      <h2 id="anTitle">공고문 AI 분석</h2>
+      <button class="icon-btn" type="button" id="anClose" aria-label="닫기">×</button>
+    </div>
+    <div class="dlg-body">
+      <div class="an-item" id="anItem"></div>
+      <div class="drop" id="anDrop" tabindex="0" role="button" aria-label="분석할 파일 선택">
+        <b>공고문 · 제안요청서 · 과업지시서 파일을 여기에 끌어다 놓으세요</b>
+        <span>또는 눌러서 파일 선택 · HWP, HWPX, PDF, DOCX, TXT · 여러 개 가능</span>
+        <input type="file" id="anFile" multiple accept=".hwp,.hwpx,.pdf,.docx,.txt" hidden>
+      </div>
+      <ul class="an-files" id="anFiles"></ul>
+      <div class="an-status" id="anStatus" role="status" aria-live="polite"></div>
+      <div id="anResult" hidden>
+        <div class="verdict" id="anVerdict"></div>
+        <div class="an-grid">
+          <label>평가비율<textarea id="rv_evaluation_ratio" rows="2"></textarea></label>
+          <label>과업기간<textarea id="rv_period" rows="2"></textarea></label>
+          <label>접수구분<textarea id="rv_submission" rows="2"></textarea></label>
+          <label>가격/제안서 입찰 마감일<textarea id="rv_deadlines" rows="3"></textarea></label>
+          <label class="wide">입찰참가범위<textarea id="rv_eligibility" rows="4"></textarea></label>
+          <label class="wide">정량점수<textarea id="rv_quantitative" rows="5"></textarea></label>
+          <label class="wide">과업내용<textarea id="rv_scope" rows="5"></textarea></label>
+          <label class="wide">고려/참고 사항<textarea id="rv_notes" rows="4"></textarea></label>
+          <label class="wide">확인할 점 (본공고 확인/소상공인 확인 등)<textarea id="rv_check_points" rows="3"></textarea></label>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <span class="note" id="anCost"></span>
+      <button class="btn" type="button" id="anCancel">닫기</button>
+      <button class="btn primary" type="button" id="anRun">AI 분석 시작</button>
+      <button class="btn primary" type="button" id="anSave" hidden>검토양식에 저장</button>
+    </div>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="js/core.js?v=1.1.0"></script>
-<script src="js/store.js?v=1.1.0"></script>
-<script src="js/demo.js?v=1.1.0"></script>
-<script src="js/app.js?v=1.1.0"></script>
+<script src="js/core.js?v=1.2.0"></script>
+<script src="js/store.js?v=1.2.0"></script>
+<script src="js/demo.js?v=1.2.0"></script>
+<script src="js/docread.js?v=1.2.0"></script>
+<script src="js/ai.js?v=1.2.0"></script>
+<script src="js/app.js?v=1.2.0"></script>
 </body>
 </html>

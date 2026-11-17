@@ -1,8 +1,8 @@
 /* 나라장터 키워드 모니터 — 화면 */
 (function () {
   "use strict";
-  var VERSION = "1.1.0";
-  var C = window.NaraCore, Store = window.NaraStore, Demo = window.NaraDemo;
+  var VERSION = "1.2.0";
+  var C = window.NaraCore, Store = window.NaraStore, Demo = window.NaraDemo, Doc = window.NaraDoc, AI = window.NaraAI;
   var KIND = C.KIND_LABEL;
   var WD = ["일", "월", "화", "수", "목", "금", "토"];
   var DAY = 864e5;
@@ -236,6 +236,7 @@
     var ev = elig(it);
     h += '<div class="row1"><span class="badge k-' + it.kind + '">' + KIND[it.kind] + "</span>";
     h += '<span class="badge e-' + ev.level + '" title="' + esc(ev.reasons.join(" / ")) + '">' + esc(ev.label) + "</span>";
+    if (it.review) h += '<span class="badge b-ai">AI 분석</span>';
     if (fresh) h += '<span class="badge b-new">NEW</span>';
     if (it.excluded.length) h += '<span class="badge b-ex">제외어 · ' + esc(it.excluded.join(", ")) + "</span>";
     var kindNm = it.details && it.details["공고종류"];
@@ -249,6 +250,11 @@
     if (it.agency) orgs.push("<span>" + (it.kind === "bid" ? "공고 " : "발주 ") + esc(it.agency) + "</span>");
     if (it.demand && it.demand !== it.agency) orgs.push("<span>" + (it.kind === "orderplan" ? "총괄 " : "수요 ") + esc(it.demand) + "</span>");
     h += '<div class="orgs">' + orgs.join("") + "</div>";
+    if (it.kind !== "orderplan") {
+      h += '<div class="card-actions"><button class="btn sm" type="button" data-analyze="' + esc(it.id) + '">' +
+           (it.review ? "공고문 AI 분석 결과" : "공고문 AI 분석") + "</button>" +
+           (it.review ? '<span class="note">' + esc(fmt(isoToKst(it.review.analyzedAt))) + " 분석 · " + esc(it.review.evaluation_ratio || "") + "</span>" : "") + "</div>";
+    }
     h += '<div class="facts"><div class="fact"><span class="l">' + esc(it.amount_label || "금액") + '</span><span class="v' + (it.amount ? "" : " none") + '">' + (it.amount ? won(it.amount) : "미공개") + "</span></div>";
     if (it.deadline) {
       var d = dday(it.deadline);
@@ -261,6 +267,13 @@
       h += "<details><summary>상세 정보 · 참가자격 판단</summary>";
       h += "<dl><dt>참가자격 판단</dt><dd><b>" + esc(ev.label) + '</b><ul class="elig-why">' +
            ev.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + "</ul></dd></dl>";
+      var rv = it.review;
+      if (rv) {
+        var rows = [["평가비율", rv.evaluation_ratio], ["정량점수", rv.quantitative], ["과업기간", rv.period], ["접수구분", rv.submission],
+                    ["마감일정", rv.deadlines], ["참가범위", rv.eligibility], ["과업내용", rv.scope], ["고려사항", rv.notes], ["확인할 점", rv.check_points]];
+        h += '<div class="rv"><h4>공고문 AI 분석 (' + esc((rv.files || []).join(", ")) + ")</h4><dl>" +
+             rows.filter(function (r) { return r[1]; }).map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join("") + "</dl></div>";
+      }
       if (keys.length) {
         h += "<dl>";
         keys.forEach(function (k) {
@@ -400,19 +413,22 @@
     var lines = [HEAD.join(",")].concat(exportRows().map(function (r) { return r.map(q).join(","); }));
     download(new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }), "nara_" + fileStamp() + ".csv");
   }
-  var xlsxPromise = null;
-  function loadXlsx() {
-    if (window.XLSX) return Promise.resolve(window.XLSX);
-    if (xlsxPromise) return xlsxPromise;
-    xlsxPromise = new Promise(function (resolve, reject) {
+  var scriptPromises = {};
+  function loadScript(src, globalName, errMsg) {
+    if (window[globalName]) return Promise.resolve(window[globalName]);
+    if (scriptPromises[src]) return scriptPromises[src];
+    scriptPromises[src] = new Promise(function (resolve, reject) {
       var s = document.createElement("script");
-      s.src = "vendor/xlsx-0.18.5.full.min.js";
-      s.onload = function () { resolve(window.XLSX); };
-      s.onerror = function () { xlsxPromise = null; reject(new Error("엑셀 모듈을 불러오지 못했습니다")); };
+      s.src = src;
+      s.onload = function () { resolve(window[globalName]); };
+      s.onerror = function () { delete scriptPromises[src]; reject(new Error(errMsg)); };
       document.head.appendChild(s);
     });
-    return xlsxPromise;
+    return scriptPromises[src];
   }
+  function loadXlsx() { return loadScript("vendor/xlsx-0.18.5.full.min.js", "XLSX", "엑셀 모듈을 불러오지 못했습니다"); }
+  function loadSdk() { return loadScript("vendor/anthropic-sdk-1.4.0.min.js", "AnthropicSDK", "Claude API 모듈을 불러오지 못했습니다. 새로고침 후 다시 시도하세요"); }
+
   // 사용자가 쓰던 '용역리서칭' 검토 양식과 같은 열 순서·너비 (A열 비움, 2행 제목, S1 '의견')
   var REVIEW_HEAD = ["업데이트날짜", "입찰공고번호", "입찰진행여부", "작성자", "유형", "키워드", "발주처", "용역명",
     "사업금액(단위:원,VAT포함)", "과업기간", "접수구분", "가격/제안서 입찰 마감일", "입찰참가범위", "평가비율", "정량점수",
@@ -435,11 +451,18 @@
     if (officer) note.push("담당자: " + officer);
     if (it.files && it.files.length) note.push("첨부: " + it.files.map(function (f) { return f.name; }).join(", "));
     if (safeUrl(it.url)) note.push("공고: " + safeUrl(it.url));
-    var why = ev.reasons.filter(function (r) { return !/1억 이상|참여 가능$|충족|제한 없음/.test(r); }).slice(0, 2);
-    return ["", dotDate(C.fmtKst(new Date()).slice(0, 10)), it.no || "", "", (S.settings.company || {}).author || "",
-      TYPE_NAME[it.kind], it.matched.join(", "), it.kind === "orderplan" ? it.agency : (it.demand || it.agency), it.title,
-      vat, period, recv, due, ev.scope, "", "", it.kind === "orderplan" ? (m.usg || "") : "", note.join(" / "),
-      ev.label + (why.length ? " — " + why.join(" / ") : "")];
+    var why = ev.reasons.filter(function (r) { return !/1억 이상|참여 가능$|충족|제한 없음|^공고문 분석/.test(r); }).slice(0, 2);
+    var rv = it.review || {};
+    var checkCol = ev.label + (why.length ? " — " + why.join(" / ") : "");
+    if (rv.small_business_rule) checkCol += "\n기업규모: " + rv.small_business_rule + " / 우리 회사 참가: " + rv.midsize_eligible +
+      (rv.small_business_evidence && rv.small_business_evidence !== "관련 문구 없음" ? "\n근거: " + rv.small_business_evidence : "");
+    if (rv.check_points) checkCol += "\n" + rv.check_points;
+    return ["", dotDate(C.fmtKst(new Date()).slice(0, 10)), it.no || rv.notice_no || "", "", (S.settings.company || {}).author || "",
+      TYPE_NAME[it.kind], it.matched.join(", "), it.kind === "orderplan" ? it.agency : (it.demand || it.agency || rv.client), it.title,
+      vat || rv.budget_vat_included || "", rv.period || period, rv.submission || recv, rv.deadlines || due,
+      rv.eligibility ? rv.eligibility + "\n[나라장터 정보] " + ev.scope : ev.scope,
+      rv.evaluation_ratio || "", rv.quantitative || "", rv.scope || (it.kind === "orderplan" ? (m.usg || "") : ""),
+      [rv.notes, note.join(" / ")].filter(Boolean).join("\n"), checkCol];
   }
   function exportXlsx() {
     if (!S.rows.length) { toast("내보낼 공고가 없습니다"); return; }
@@ -466,9 +489,149 @@
       .then(function () { $("xlsxBtn").disabled = false; });
   }
 
+  // ───────────────────────── 공고문 AI 분석 창 ─────────────────────────
+  var AN = { item: null, docs: [], result: null, ctrl: null, timer: null };
+  var PDF_LIMIT = 20 * 1024 * 1024;
+  var RV_FIELDS = ["evaluation_ratio", "period", "submission", "deadlines", "eligibility", "quantitative", "scope", "notes", "check_points"];
+
+  function openAnalyze(id) {
+    var it = S.items.filter(function (x) { return x.id === id; })[0];
+    if (!it) return;
+    AN.item = it; AN.docs = []; AN.result = it.review ? JSON.parse(JSON.stringify(it.review)) : null;
+    var url = safeUrl(it.url), files = (it.files || []).filter(function (f) { return safeUrl(f.url); });
+    $("anItem").innerHTML = "<b>" + esc(it.title) + "</b>" + esc(KIND[it.kind] + " · " + (it.no || "") + " · " + (it.demand || it.agency || "")) +
+      (url ? ' · <a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">나라장터 공고 열기 ↗</a>' : "") +
+      (files.length ? '<div class="files">' + files.map(function (f) {
+        return '<a href="' + esc(safeUrl(f.url)) + '" target="_blank" rel="noopener noreferrer">📎 ' + esc(f.name) + "</a>"; }).join("") + "</div>" +
+        '<div class="note">위 첨부파일을 내려받아 아래에 끌어다 놓으세요.</div>'
+        : '<div class="note">나라장터에서 공고문·제안요청서를 내려받아 아래에 끌어다 놓으세요.</div>');
+    renderAnFiles(); setAnStatus(""); $("anCost").textContent = "";
+    showAnResult(AN.result);
+    if (AN.result && AN.result.usage) $("anCost").textContent = "지난 분석: " + fmt(isoToKst(AN.result.analyzedAt)) + " · 약 $" + AN.result.usage.cost.toFixed(2);
+    updateAnButtons();
+    var dlg = $("analyze");
+    if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
+  }
+  function closeAnalyze() {
+    if (AN.ctrl) { AN.ctrl.abort(); return; }
+    var dlg = $("analyze"); if (dlg.open) dlg.close();
+    AN.item = null; AN.docs = [];
+  }
+  function setAnStatus(msg, isErr, html) {
+    var el = $("anStatus");
+    el.className = "an-status" + (isErr ? " err" : "");
+    if (html) el.innerHTML = html; else el.textContent = msg || "";
+  }
+  function fmtMB(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.max(1, Math.round(n / 1024)) + "KB"; }
+  function renderAnFiles() {
+    $("anFiles").innerHTML = AN.docs.map(function (d, i) {
+      var st = d.status === "reading" ? "읽는 중…" : d.status === "error" ? d.error
+        : d.kind === "pdf" ? "PDF " + fmtMB(d.size) + " · 그대로 AI 에 전달" : "글자 " + d.chars.toLocaleString("ko-KR") + "자 추출";
+      return '<li><span class="nm">' + esc(d.name) + '</span><span class="st' + (d.status === "error" ? " bad" : "") + '">' + esc(st) +
+             '</span><button class="icon-btn" type="button" data-rmdoc="' + i + '" aria-label="' + esc(d.name) + ' 빼기" title="빼기">×</button></li>';
+    }).join("");
+    var ok = AN.docs.filter(function (d) { return d.status === "ok"; });
+    if (ok.length && !AN.ctrl) {
+      var est = AI.estimate(ok);
+      $("anCost").textContent = "예상 입력 약 " + (est.tokens < 1000 ? "1천 토큰 미만" : Math.round(est.tokens / 1000).toLocaleString("ko-KR") + "천 토큰") + " · 예상 비용 약 $" + est.cost.toFixed(2);
+    }
+  }
+  function addAnFiles(list) {
+    Array.prototype.forEach.call(list, function (f) {
+      var d = { name: f.name, size: f.size, status: "reading" };
+      AN.docs.push(d); renderAnFiles();
+      f.arrayBuffer().then(function (buf) {
+        var head = new Uint8Array(buf.slice(0, 8)), kind = Doc.kindOf(f.name, head);
+        if (kind === "pdf" && AN.docs.reduce(function (s, x) { return s + (x.kind === "pdf" && x !== d ? x.size : 0); }, buf.byteLength) > PDF_LIMIT) {
+          throw new Error("PDF 가 너무 큽니다(합계 20MB 이하). 공고문·제안요청서만 올려 주세요");
+        }
+        return (kind === "hwp" ? loadXlsx().then(function (X) { return Doc.readFile(f.name, buf, X.CFB); }) : Doc.readFile(f.name, buf, null));
+      }).then(function (r) { Object.assign(d, r, { status: "ok" }); }, function (e) { d.status = "error"; d.error = e.message || String(e); })
+        .then(function () { renderAnFiles(); updateAnButtons(); });
+    });
+    updateAnButtons();
+  }
+  function updateAnButtons() {
+    var busy = !!AN.ctrl, reading = AN.docs.some(function (d) { return d.status === "reading"; });
+    var ready = AN.docs.some(function (d) { return d.status === "ok"; });
+    $("anRun").disabled = busy || reading || !ready;
+    $("anRun").textContent = AN.result ? "다시 분석" : "AI 분석 시작";
+    $("anSave").hidden = !AN.result || busy;
+    $("anCancel").textContent = busy ? "분석 취소" : "닫기";
+    $("anDrop").classList.toggle("disabled", busy);
+  }
+  function showAnResult(rv) {
+    $("anResult").hidden = !rv;
+    if (!rv) return;
+    RV_FIELDS.forEach(function (k) { $("rv_" + k).value = rv[k] || ""; });
+    var cls = rv.midsize_eligible === "가능" ? "v-ok" : rv.midsize_eligible === "불가" ? "v-no" : "v-check";
+    $("anVerdict").className = "verdict " + cls;
+    $("anVerdict").innerHTML = "<div><b>기업규모 제한: " + esc(rv.small_business_rule) + "</b> · 우리 회사 참가: <b>" + esc(rv.midsize_eligible) + "</b></div>" +
+      (rv.small_business_evidence ? "<q>" + esc(rv.small_business_evidence) + "</q>" : "");
+  }
+  function runAnalyze() {
+    if (!S.settings.aiKey) {
+      setAnStatus("", true, '먼저 Claude API 키를 넣어 주세요. <button class="linkish" type="button" id="anOpenSettings">설정 열기</button>');
+      return;
+    }
+    var docs = AN.docs.filter(function (d) { return d.status === "ok"; });
+    if (!docs.length) return;
+    AN.ctrl = new AbortController();
+    var started = Date.now();
+    setAnStatus("", false, '<span class="spin" aria-hidden="true"></span><span id="anMsg">AI 를 준비하는 중…</span> <span class="note" id="anTime"></span>');
+    AN.timer = setInterval(function () { var t = $("anTime"); if (t) t.textContent = "(" + Math.round((Date.now() - started) / 1000) + "초, 보통 1~3분)"; }, 1000);
+    updateAnButtons();
+    var it = AN.item;
+    loadSdk().then(function (SDK) {
+      return AI.analyze({ apiKey: S.settings.aiKey, SDK: SDK, docs: docs, item: it, company: S.settings.company,
+        signal: AN.ctrl.signal, onStatus: function (m) { var el = $("anMsg"); if (el) el.textContent = m; } });
+    }).then(function (r) {
+      AN.result = Object.assign({}, r.result, { analyzedAt: new Date().toISOString(), files: docs.map(function (d) { return d.name; }), usage: r.usage, model: r.model });
+      showAnResult(AN.result);
+      setAnStatus("분석을 마쳤습니다. 내용을 확인하고 필요하면 고친 뒤 [검토양식에 저장]을 누르세요.");
+      $("anCost").textContent = "이번 분석 비용 약 $" + r.usage.cost.toFixed(2) + " (입력 " + r.usage.input.toLocaleString("ko-KR") + " · 출력 " + r.usage.output.toLocaleString("ko-KR") + " 토큰)";
+    }, function (e) { setAnStatus(e.message || String(e), true); })
+      .then(function () { clearInterval(AN.timer); AN.ctrl = null; updateAnButtons(); });
+  }
+  function saveAnalyze() {
+    if (!AN.item || !AN.result) return;
+    RV_FIELDS.forEach(function (k) { AN.result[k] = $("rv_" + k).value.trim(); });
+    var it = AN.item;
+    it.review = AN.result;
+    if (!S.demo) Store.putItems([it]);
+    var ev = C.assess(it, S.settings.company);
+    closeAnalyze();
+    renderAll();
+    toast("저장했습니다 · 참가자격: " + ev.label, 3500);
+  }
+  function bindAnalyze() {
+    var drop = $("anDrop"), input = $("anFile");
+    drop.addEventListener("click", function () { if (!AN.ctrl) input.click(); });
+    drop.addEventListener("keydown", function (e) { if ((e.key === "Enter" || e.key === " ") && !AN.ctrl) { e.preventDefault(); input.click(); } });
+    input.addEventListener("change", function () { addAnFiles(input.files); input.value = ""; });
+    ["dragenter", "dragover"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
+    ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
+    drop.addEventListener("drop", function (e) { if (!AN.ctrl && e.dataTransfer && e.dataTransfer.files.length) addAnFiles(e.dataTransfer.files); });
+    $("anFiles").addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-rmdoc]"); if (!b || AN.ctrl) return;
+      AN.docs.splice(+b.dataset.rmdoc, 1); renderAnFiles(); updateAnButtons();
+    });
+    $("anRun").addEventListener("click", runAnalyze);
+    $("anSave").addEventListener("click", saveAnalyze);
+    $("anCancel").addEventListener("click", closeAnalyze);
+    $("anClose").addEventListener("click", function () { if (AN.ctrl) AN.ctrl.abort(); var d = $("analyze"); if (d.open) d.close(); });
+    $("analyze").addEventListener("cancel", function (e) { if (AN.ctrl) { e.preventDefault(); AN.ctrl.abort(); } });
+    $("anStatus").addEventListener("click", function (e) {
+      if (e.target.id === "anOpenSettings") { var d = $("analyze"); if (d.open) d.close(); openSettings(); setTimeout(function () { $("sAiKey").focus(); }, 80); }
+    });
+    // 창 밖에 파일을 떨어뜨려도 브라우저가 파일을 열어버리지 않게
+    window.addEventListener("dragover", function (e) { e.preventDefault(); });
+    window.addEventListener("drop", function (e) { e.preventDefault(); });
+  }
+
   // ───────────────────────── 설정 창 ─────────────────────────
   var draft = null, draftBase = "";
-  function snapshot(o) { return JSON.stringify({ k: o.serviceKey, kw: o.keywords, ex: o.excludes, s: o.sources, c: o.categories, a: o.autoFetch, am: o.autoFetchMinutes, kd: o.keepDays, co: o.company }); }
+  function snapshot(o) { return JSON.stringify({ ai: o.aiKey || "", k: o.serviceKey, kw: o.keywords, ex: o.excludes, s: o.sources, c: o.categories, a: o.autoFetch, am: o.autoFetchMinutes, kd: o.keepDays, co: o.company }); }
 
   function openSettings() {
     draft = JSON.parse(JSON.stringify(S.settings)); draft._added = {};
@@ -483,6 +646,8 @@
     $("sSize").value = draft.company.size || "중기업";
     $("sRegion").value = draft.company.region || "";
     $("sAuthor").value = draft.company.author || "";
+    $("sAiKey").value = draft.aiKey || ""; $("sAiKey").type = "password"; $("sAiKeyShow").textContent = "보기";
+    $("sAiKeyResult").innerHTML = "";
     renderDraft();
     var dlg = $("settings");
     if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
@@ -539,6 +704,7 @@
     if (!draft.keywords.length) { toast("검색 키워드를 1개 이상 넣어 주세요"); return; }
     if (!Object.keys(draft.sources).some(function (k) { return draft.sources[k]; })) { toast("수집 대상을 1개 이상 고르세요"); return; }
     if (!draft.categories.length) { toast("업무구분을 1개 이상 고르세요"); return; }
+    draft.aiKey = $("sAiKey").value.trim();
     draft.autoFetch = $("sAuto").checked;
     draft.autoFetchMinutes = +$("sAutoMin").value || 60;
     draft.keepDays = +$("sKeep").value || 60;
@@ -647,6 +813,8 @@
       $("toolbar").scrollIntoView({ behavior: "smooth", block: "start" });
     });
     $("list").addEventListener("click", function (e) {
+      var an = e.target.closest("button[data-analyze]");
+      if (an) { openAnalyze(an.dataset.analyze); return; }
       var b = e.target.closest("button[data-copy]"); if (!b) return;
       var v = b.dataset.copy;
       copyText(v).then(function () { toast("복사했습니다: " + v); }, function () { toast("복사가 안 되면 번호를 직접 선택해 복사하세요: " + v, 4000); });
@@ -664,6 +832,20 @@
       var show = $("sKey").type === "password"; $("sKey").type = show ? "text" : "password"; $("sKeyShow").textContent = show ? "숨기기" : "보기";
     });
     $("sKeyTest").addEventListener("click", testKey);
+    $("sAiKey").addEventListener("input", function () { if (draft) { draft.aiKey = $("sAiKey").value.trim(); renderDraft(); } });
+    $("sAiKeyShow").addEventListener("click", function () {
+      var show = $("sAiKey").type === "password"; $("sAiKey").type = show ? "text" : "password"; $("sAiKeyShow").textContent = show ? "숨기기" : "보기";
+    });
+    $("sAiKeyTest").addEventListener("click", function () {
+      var key = $("sAiKey").value.trim(), out = $("sAiKeyResult");
+      if (!key) { out.innerHTML = '<span class="bad">Claude API 키를 먼저 넣어 주세요.</span>'; return; }
+      $("sAiKeyTest").disabled = true;
+      out.innerHTML = '<span><span class="spin" aria-hidden="true"></span> 확인 중…</span>';
+      loadSdk().then(function (SDK) { return AI.checkKey(key, SDK); }).then(function (name) {
+        out.innerHTML = '<span class="okr">✓ 키가 정상입니다 (' + esc(name) + "). [저장]을 누르세요.</span>";
+      }, function (e) { out.innerHTML = '<span class="bad">✕ ' + esc(e.message) + "</span>"; })
+        .then(function () { $("sAiKeyTest").disabled = false; });
+    });
     $("sKwAdd").addEventListener("click", function () { addWords("keywords", "sKwIn"); });
     function addCodes() {
       var inp = $("sCodeIn"), list = inp.value.split(/[,\s]+/).filter(Boolean), bad = [], added = 0;
@@ -717,6 +899,7 @@
         ["keywords", "excludes", "categories"].forEach(function (k) { if (Array.isArray(st[k])) draft[k] = C.cleanWords(st[k]); });
         if (st.sources) ["bid", "prespec", "orderplan"].forEach(function (k) { draft.sources[k] = !!st.sources[k]; });
         if (typeof st.serviceKey === "string" && st.serviceKey) { draft.serviceKey = st.serviceKey.trim(); $("sKey").value = draft.serviceKey; }
+        if (typeof st.aiKey === "string" && st.aiKey) { draft.aiKey = st.aiKey.trim(); $("sAiKey").value = draft.aiKey; }
         ["autoFetch", "autoFetchMinutes", "keepDays"].forEach(function (k) { if (st[k] != null) draft[k] = st[k]; });
         if (st.company && Array.isArray(st.company.codes)) {
           draft.company = { size: st.company.size || "중기업", region: st.company.region || "", author: st.company.author || "",
@@ -737,6 +920,8 @@
         renderAll();
       });
     });
+
+    bindAnalyze();
 
     // 테마
     var root = document.documentElement;

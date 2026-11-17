@@ -22,6 +22,7 @@
 
   var DEFAULT_SETTINGS = {
     serviceKey: "",
+    aiKey: "",
     keywords: ["경영", "전략", "중장기", "조직", "성과", "평가"],
     // 회사 실적 662건과 대조해 충돌이 없는 것만 선별 (2026-11): 실적 중 잘못 제외되는 건 0건
     excludes: ["환경영향평가", "전략환경영향평가", "환경영향", "교통영향평가", "재해영향평가", "건강영향평가",
@@ -664,8 +665,20 @@
     company = company || {};
     var level = "ok", reasons = [], scope = [];
     function bump(l) { if (ELIG_RANK[l] > ELIG_RANK[level]) level = l; }
-    var pb = priceBasis(it), small = company.size === "소기업";
+    var pb = priceBasis(it), small = company.size === "소기업", rv = it.review || null;
+    var rvRule = rv && rv.small_business_rule, rvOpen = rvRule === "중소기업 참가(중기업 가능)" || rvRule === "기업규모 제한 없음";
+    if (rv) {   // 공고문 AI 분석 결과가 있으면 금액 추정보다 우선한다
+      var ev = rv.small_business_evidence && rv.small_business_evidence !== "관련 문구 없음" ? " (근거: " + rv.small_business_evidence + ")" : "";
+      if (rvRule === "소기업·소상공인만 참가" && !small) { bump("no"); reasons.push("공고문 분석: 소기업·소상공인만 참가" + ev); }
+      else if (rvRule && rvRule !== "판단 불가") reasons.push("공고문 분석: " + rvRule + ev);
+      if (rv.midsize_eligible === "불가") { bump("no"); reasons.push("공고문 분석: 우리 회사 참가 불가"); }
+      else if (rv.midsize_eligible === "확인 필요") { bump("check"); reasons.push("공고문 분석: 참가자격 추가 확인 필요" + (rv.check_points ? " — " + String(rv.check_points).split("\n")[0] : "")); }
+    }
     if (!pb) { bump("check"); reasons.push("금액 미공개 — 공고문에서 참가자격 확인"); scope.push("금액 미공개"); }
+    else if (pb.v < SMALL_LIMIT && !small && rvOpen) {
+      reasons.push(pb.how + " " + fmtWon(pb.v) + " → 1억 미만이지만 공고문상 중기업 참가 가능 (예외 공고)");
+      scope.push("1억 미만이지만 기업규모 제한 예외(공고문 확인)");
+    }
     else if (pb.v < SMALL_LIMIT && !small) {
       bump("small");
       reasons.push(pb.how + " " + fmtWon(pb.v) + " → 1억 미만이라 소기업·소상공인 제한일 가능성이 큽니다. 제한이 없는 예외 공고인지 공고문에서 확인하세요.");
